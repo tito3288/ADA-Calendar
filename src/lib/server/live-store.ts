@@ -1,10 +1,11 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import type { Actor, AppState, Attachment, Client, EmailDraft, PendingRequest, Priority, ScheduleProposal, WorkEvent, WorkspaceSettings } from "../types";
+import type { Actor, AppState, Attachment, Client, EmailDraft, PendingRequest, Priority, ScheduleProposal, ScheduleSnapshot, WorkEvent, WorkspaceSettings } from "../types";
 import { planCommands, validateSchedule } from "../scheduler";
 import { buildCommitNotifications, buildDraftNotifications, buildRequestNotifications } from "./email";
 import { assertLiveActor, requireOwner } from "./auth";
-import { getSupabaseServerClient } from "./supabase";
+import { getSupabaseAdminClient, getSupabaseServerClient } from "./supabase";
+import { assertReviewedProposal } from "./preview";
 
 function check(error: { message: string } | null, operation: string) {
   if (error) throw new Error(`${operation}: ${error.message}`);
@@ -23,9 +24,8 @@ export async function getLiveState(actorId: string): Promise<AppState> {
   check(memberResult.error, "Read workspace membership");
   const workspaceId = memberResult.data!.workspace_id as string;
   const result = await Promise.all([
-    db.from("workspaces").select("*").eq("id", workspaceId).single(),
+    db.rpc("read_schedule_snapshot"),
     db.from("workspace_members").select("user_id,name,email,role").eq("workspace_id", workspaceId).eq("active", true),
-    db.from("work_sessions").select("body").eq("workspace_id", workspaceId).order("starts_at").order("id"),
     db.from("work_events").select("body").eq("workspace_id", workspaceId).order("created_at", { ascending: false }).limit(200),
     db.from("pending_requests").select("body").eq("workspace_id", workspaceId).order("created_at", { ascending: false }).limit(200),
     db.from("notifications").select("*").eq("workspace_id", workspaceId).order("created_at", { ascending: false }).limit(300),
@@ -34,16 +34,16 @@ export async function getLiveState(actorId: string): Promise<AppState> {
     db.from("ai_usage").select("amount_usd").eq("workspace_id", workspaceId).gte("created_at", new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString()),
   ]);
   for (const row of result) check(row.error, "Read live workspace");
-  const w = result[0].data!;
+  const snapshot = result[0].data as ScheduleSnapshot | null;
+  if (!snapshot || snapshot.workspaceId !== workspaceId) throw new Error("Your workspace is no longer available. Sign in again.");
   return {
-    workspaceId, version: Number(w.version), settings: w.settings, clients: w.clients, priorities: w.priorities,
-    items: w.items, blocks: w.blocks, sessions: result[2].data!.map((row) => row.body),
+    ...snapshot,
     actor, members: result[1].data!.map((row) => ({ id: row.user_id, name: row.name, email: row.email, role: row.role })),
-    events: result[3].data!.map((row) => row.body), requests: result[4].data!.map((row) => row.body),
-    notifications: result[5].data!.map((n) => ({ id: n.id, eventId: n.event_id, recipient: n.recipient, recipientName: n.recipient_name, subject: n.subject, body: n.body, status: n.status, attempts: n.attempts, providerId: n.provider_id, createdAt: n.created_at, lastError: n.last_error })),
-    attachments: result[6].data!.map((a) => ({ id: a.id, workItemId: a.work_item_id, name: a.name, contentType: a.content_type, size: Number(a.size), path: a.path, uploadedBy: a.uploaded_by, createdAt: a.created_at, removedAt: a.removed_at })),
-    emailDrafts: result[7].data!.map((d) => ({ id: d.id, authorId: d.author_id, itemId: d.item_id, subject: d.subject, body: d.body, status: d.status, createdAt: d.created_at })),
-    aiUsageUsd: result[8].data!.reduce((sum, row) => sum + Number(row.amount_usd), 0), mode: "live",
+    events: result[2].data!.map((row) => row.body), requests: result[3].data!.map((row) => row.body),
+    notifications: result[4].data!.map((n) => ({ id: n.id, eventId: n.event_id, recipient: n.recipient, recipientName: n.recipient_name, subject: n.subject, body: n.body, status: n.status, attempts: n.attempts, providerId: n.provider_id, createdAt: n.created_at, lastError: n.last_error })),
+    attachments: result[5].data!.map((a) => ({ id: a.id, workItemId: a.work_item_id, name: a.name, contentType: a.content_type, size: Number(a.size), path: a.path, uploadedBy: a.uploaded_by, createdAt: a.created_at, removedAt: a.removed_at })),
+    emailDrafts: result[6].data!.map((d) => ({ id: d.id, authorId: d.author_id, itemId: d.item_id, subject: d.subject, body: d.body, status: d.status, createdAt: d.created_at })),
+    aiUsageUsd: result[7].data!.reduce((sum, row) => sum + Number(row.amount_usd), 0), mode: "live",
   };
 }
 
@@ -80,6 +80,7 @@ export async function commitLiveProposal(actor: Actor, proposal: ScheduleProposa
   if (proposal.baseVersion !== state.version) throw new Error("Your calendar changed. Review a fresh proposal before saving.");
   // Never persist model/client supplied sessions directly. Recompute from commands and the latest trusted state.
   const fresh = planCommands(state, proposal.commands, trusted, { operationId: proposal.operationId, approveDisplacement: trusted.role === "owner" });
+  assertReviewedProposal(proposal, fresh);
   if (fresh.status !== "ready" || fresh.requiresApproval) throw new Error(fresh.conflicts.map((c) => c.message).join(" ") || "This request needs owner approval or a different opening.");
   return persist(state, fresh);
 }
@@ -88,11 +89,25 @@ export async function submitLiveRequest(actor: Actor, proposal: ScheduleProposal
   const trusted = await assertLiveActor(actor);
   if (trusted.role !== "requester") throw new Error("Only requesters submit priority requests.");
   const state = await getLiveState(trusted.id);
+  const db = await getSupabaseServerClient();
+  const [priorEvent, priorRequest] = await Promise.all([
+    db.from("work_events").select("actor_id,operation_payload").eq("workspace_id", state.workspaceId).eq("operation_id", proposal.operationId).maybeSingle(),
+    db.from("pending_requests").select("requester_id,body").eq("workspace_id", state.workspaceId).eq("id", proposal.operationId).maybeSingle(),
+  ]);
+  check(priorEvent.error, "Check booking retry"); check(priorRequest.error, "Check request retry");
+  if (priorEvent.data) {
+    if (priorEvent.data.actor_id !== trusted.id || canonical(priorEvent.data.operation_payload) !== canonical(proposal.commands)) throw new Error("That operation id belongs to a different command or account.");
+    return state;
+  }
+  if (priorRequest.data) {
+    if (priorRequest.data.requester_id !== trusted.id || canonical(priorRequest.data.body.proposal.commands) !== canonical(proposal.commands)) throw new Error("That operation id belongs to a different request or account.");
+    return state;
+  }
   if (proposal.baseVersion !== state.version) throw new Error("The schedule changed. Check availability again.");
   const fresh = planCommands(state, proposal.commands, trusted, { operationId: proposal.operationId });
+  assertReviewedProposal(proposal, fresh);
   if (fresh.status === "ready" && !fresh.requiresApproval) return persist(state, fresh);
   const request: PendingRequest = { id: proposal.operationId, requesterId: trusted.id, requesterName: trusted.name, proposal: fresh, status: "pending", note, createdAt: new Date().toISOString(), resolvedAt: null };
-  const db = await getSupabaseServerClient();
   const { error } = await db.rpc("submit_schedule_request", { p_request: request, p_notifications: buildRequestNotifications(request, state) });
   check(error, "Submit priority request");
   return getLiveState(trusted.id);
@@ -107,6 +122,7 @@ export async function resolveLiveRequest(actor: Actor, requestId: string, decisi
     if (!freshProposal || freshProposal.baseVersion !== state.version) throw new Error("The schedule changed or this approval has no current preview. Review the updated impact before approving.");
     const commands = freshProposal.commands.map((command) => command.type === "create" ? { ...command, item: { ...command.item, requesterId: request.requesterId, requestedBy: request.requesterName } } : command);
     const proposal = planCommands(state, commands, trusted, { operationId: `approve/${request.id}`, approveDisplacement: true });
+    assertReviewedProposal(freshProposal, proposal);
     if (proposal.status !== "ready" || proposal.requiresApproval) throw new Error(proposal.conflicts.map((c) => c.message).join(" ") || "The request still cannot fit; revise its dates or effort.");
     return persist(state, proposal, { requestId: request.id, type: "request_approved" });
   }
@@ -169,16 +185,16 @@ export async function mutateLiveAdmin(actor: Actor, action: LiveAdminAction): Pr
 }
 
 export async function beginLiveAIOperation(actor: Actor, input: { id: string; kind: "assistant" | "transcribe"; inputHash: string; reserveUsd: number }): Promise<{ status: "claimed" | "processing" | "completed" | "failed"; result: unknown }> {
-  await assertLiveActor(actor);
-  const db = await getSupabaseServerClient();
-  const { data, error } = await db.rpc("begin_ai_operation", { p_id: input.id, p_kind: input.kind, p_input_hash: input.inputHash, p_reserve_usd: input.reserveUsd });
+  const trusted = await assertLiveActor(actor);
+  const db = getSupabaseAdminClient();
+  const { data, error } = await db.rpc("begin_ai_operation", { p_actor: trusted.id, p_id: input.id, p_kind: input.kind, p_input_hash: input.inputHash, p_reserve_usd: input.reserveUsd });
   check(error, "Begin assistant operation");
   return data;
 }
 
 export async function finishLiveAIOperation(actor: Actor, id: string, result: unknown, costUsd?: number | null, error?: string | null): Promise<void> {
-  await assertLiveActor(actor);
-  const db = await getSupabaseServerClient();
-  const response = await db.rpc("finish_ai_operation", { p_id: id, p_result: result, p_cost_usd: costUsd ?? null, p_error: error ?? null });
+  const trusted = await assertLiveActor(actor);
+  const db = getSupabaseAdminClient();
+  const response = await db.rpc("finish_ai_operation", { p_actor: trusted.id, p_id: id, p_result: result, p_cost_usd: costUsd ?? null, p_error: error ?? null });
   check(response.error, "Finish assistant operation");
 }

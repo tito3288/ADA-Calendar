@@ -76,7 +76,7 @@ function subtract(whole: Interval, occupied: Interval[]): Interval[] {
   return result;
 }
 
-/** Reserve-eligible IT may occur earlier than the displayed reserve. Its minutes release
+/** Owner-authorized unexpected work may occur earlier than the displayed reserve. Its minutes release
  * equivalent *still usable* reserve capacity; elapsed reserve time is never recreated. */
 function reserveBlock(snapshot: ScheduleSnapshot, date: string, now: string): Interval | null {
   const { reserve } = dayBounds(snapshot, date);
@@ -200,9 +200,8 @@ export function validateSchedule(snapshot: ScheduleSnapshot, now = new Date().to
     if (planned(session) && item.deadline && date > item.deadline) errors.push(conflict("firm_deadline", `“${item.title}” would miss its firm deadline of ${item.deadline}.`, [item.id]));
     if (planned(session) && part.end > instantMs(now) && !session.usesReserve) {
       const reserved = reserveBlock(snapshot, date, now);
-      if (reserved && overlap(part, reserved)) errors.push(conflict("it_reserve", `“${item.title}” occupies unallocated IT reserve.`, [item.id]));
+      if (reserved && overlap(part, reserved)) errors.push(conflict("unexpected_work_reserve", `“${item.title}” occupies unallocated unexpected-work reserve.`, [item.id]));
     }
-    if (session.usesReserve && item.category !== "it") errors.push(conflict("reserve_category", `Only IT work may consume the IT reserve.`, [item.id]));
     if (snapshot.blocks.some((block) => isInstant(block.start) && isInstant(block.end) && overlap(part, range(block)))) errors.push(conflict("unavailable", `“${item.title}” overlaps unavailable time.`, [item.id]));
   }
   valid.sort((a, b) => instantMs(a.start) - instantMs(b.start) || a.id.localeCompare(b.id));
@@ -484,7 +483,7 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
         }
       }
     }
-    // Cancelling/reducing an IT reservation can close capacity it previously released.
+    // Cancelling/reducing an unexpected-work reservation can close capacity it previously released.
     // Replan affected ordinary sessions instead of leaving a hidden reserve violation.
     const reserveDependent = draft.sessions.filter((session) => {
       if (!planned(session) || session.usesReserve || instantMs(session.end) <= instantMs(now)) return false;
@@ -493,15 +492,34 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
     });
     for (const session of reserveDependent) {
       if (explicitIds.has(session.workItemId) || actor.role !== "owner") continue;
-      if (session.protected && !protectedOverride(session.workItemId)) { errors.push(conflict("protected_session", "Changing IT reserve would move protected work; explicitly override it.", [session.workItemId])); continue; }
+      if (session.protected && !protectedOverride(session.workItemId)) { errors.push(conflict("protected_session", "Changing unexpected-work reserve would move protected work; explicitly override it.", [session.workItemId])); continue; }
       if (session.protected) replacementProtected.add(session.workItemId);
       removeFutureSession(draft, session, now);
       scheduleIds.add(session.workItemId); forcedDisplacedIds.add(session.workItemId);
     }
     if (errors.length) return fail(errors);
 
-    const queue = [...scheduleIds].map((id) => draft.items.find((item) => item.id === id)!).filter(liveItem)
-      .sort((a, b) => Number(urgentIds.has(b.id)) - Number(urgentIds.has(a.id)) || rank(draft, a) - rank(draft, b) || (a.deadline ?? "9999").localeCompare(b.deadline ?? "9999") || a.id.localeCompare(b.id));
+    // Allocate fixed/restricted work before flexible priority work. Within restricted
+    // work, an earlier final eligible day and fewer allowed days are tighter limits.
+    // Urgency affects priority, never permission to break a hard date or protection.
+    const hardWindow = (item: WorkItem) => {
+      const lastAllowed = [...item.allowedDates].sort().at(-1);
+      return {
+        constrained: !!item.deadline || !!lastAllowed,
+        end: [item.deadline, lastAllowed].filter((date): date is string => !!date).sort()[0] ?? "9999",
+        days: new Set(item.allowedDates).size || Number.MAX_SAFE_INTEGER,
+      };
+    };
+    const compareWork = (a: WorkItem, b: WorkItem) => {
+      const aWindow = hardWindow(a); const bWindow = hardWindow(b);
+      const effectiveRank = (item: WorkItem) => urgentIds.has(item.id) ? Math.min(0, rank(draft, item)) : rank(draft, item);
+      return Number(explicitIds.has(b.id)) - Number(explicitIds.has(a.id)) ||
+        Number(bWindow.constrained) - Number(aWindow.constrained) ||
+        aWindow.end.localeCompare(bWindow.end) || aWindow.days - bWindow.days ||
+        effectiveRank(a) - effectiveRank(b) || (target(a) ?? "9999").localeCompare(target(b) ?? "9999") ||
+        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+    };
+    const queue = [...scheduleIds].map((id) => draft.items.find((item) => item.id === id)!).filter(liveItem).sort(compareWork);
     const requester = actor.role === "requester";
     const displacedIds = new Set<string>(forcedDisplacedIds);
     const settledIds = new Set<string>();
@@ -511,7 +529,7 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
       settledIds.add(item.id);
       const incomingRequest = requester && !snapshot.items.some((existing) => existing.id === item.id);
       const desiredEnd = target(item);
-      const useReserve = !requester && urgentIds.has(item.id) && item.category === "it";
+      const useReserve = !requester && urgentIds.has(item.id);
       const urgent = urgentIds.has(item.id);
       const ownerApproved = actor.role === "owner" && !!options.approveDisplacement;
       const accept = (sessions: WorkSession[]) => draft.sessions.push(...sessions.map((session) => ({ ...session, protected: replacementProtected.has(item.id) || session.protected })));
@@ -541,8 +559,7 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
         const trial = clone(draft);
         for (const old of overlaps) removeFutureSession(trial, trial.sessions.find((session) => session.id === old.id)!, now);
         trial.sessions.push(...borrowed.sessions.map((session) => ({ ...session, protected: replacementProtected.has(item.id) || session.protected })));
-        const displaced = [...new Set(overlaps.map((session) => session.workItemId))].map((id) => trial.items.find((entry) => entry.id === id)!)
-          .sort((a, b) => (a.deadline ?? "9999").localeCompare(b.deadline ?? "9999") || rank(trial, a) - rank(trial, b) || a.id.localeCompare(b.id));
+        const displaced = [...new Set(overlaps.map((session) => session.workItemId))].map((id) => trial.items.find((entry) => entry.id === id)!).sort(compareWork);
         let repairable = true;
         for (const displacedItem of displaced) {
           const repair = allocation(trial, displacedItem, now);

@@ -1,0 +1,12 @@
+node_modules
+.next
+.next-e2e
+.data-e2e
+coverage
+.github
+.git
+.env*
+.data
+coverage
+test-results
+playwright-report

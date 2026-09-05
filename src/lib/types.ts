@@ -44,6 +44,7 @@ export interface ScheduleConflict { code: string; message: string; itemIds: stri
 export interface ScheduleAlternative { start: string; end: string; label: string; sessions: WorkSession[] }
 export interface ScheduleProposal {
   id: string; operationId: string; baseVersion: number; actorId: string; commands: WorkCommand[];
+  reviewFingerprint?: string;
   status: "ready" | "approval_required" | "infeasible"; requiresApproval: boolean;
   items: WorkItem[]; sessions: WorkSession[]; blocks: UnavailableBlock[];
   affectedItemIds: string[]; summary: string[]; conflicts: ScheduleConflict[];

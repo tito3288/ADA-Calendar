@@ -2,6 +2,7 @@ import { z } from "zod";
 import { isDate, isInstant } from "./time";
 
 export const idSchema = z.string().min(1).max(150).regex(/^[\w-]+$/);
+export const reviewFingerprintSchema = z.string().regex(/^[a-f0-9]{64}$/, "Check a fresh schedule preview.");
 export const dateSchema = z.string().refine(isDate, "Use a valid calendar date.");
 export const instantSchema = z.string().refine(isInstant, "Use a date and time with a timezone.");
 const minutes = z.number().int().min(0).max(100_000);
@@ -39,6 +40,7 @@ export const commandSchema = z.discriminatedUnion("type", [
 ]);
 export const commandRequestSchema = z.object({
   commands: z.array(commandSchema).min(1).max(30), operationId: idSchema, baseVersion: z.number().int().min(0).optional(),
+  reviewFingerprint: reviewFingerprintSchema.optional(),
   action: z.enum(["preview", "commit", "request"]).default("preview"), note: z.string().max(5000).optional(),
 }).strict();
 const clockTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);

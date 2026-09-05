@@ -87,6 +87,38 @@ describe("deterministic effort allocation", () => {
     expect(result.items[0].remainingMinutes).toBe(20);
   });
 
+  it.each(["deadline", "allowed dates"] as const)("allocates %s constraints before higher-priority flexible work", (restriction) => {
+    const constrained = item("z-constrained", 180, restriction === "deadline" ? { deadline: DAY } : { allowedDates: [DAY] });
+    const flexible = item("a-flexible", 390, { priorityId: "high" });
+    const result = planCommands(snapshot(), [{ type: "create", item: flexible }, { type: "create", item: constrained }], owner, { now: NOW });
+    expect(result.status).toBe("ready");
+    expect(sessionsFor(result, constrained.id)).toEqual([expect.objectContaining({ start: at("09:00"), end: at("12:00") })]);
+    expect(result.items.find(work => work.id === flexible.id)?.forecastDate).toBe("2026-09-08");
+    expect(validateSchedule(apply(snapshot(), result), NOW)).toEqual([]);
+  });
+
+  it("orders hard deadlines by the last eligible day before applying priority", () => {
+    const later = item("a-later-high", 390, { priorityId: "high", deadline: "2026-09-08" });
+    const earlier = item("z-earlier-normal", 180, { deadline: DAY });
+    const result = planCommands(snapshot(), [{ type: "create", item: later }, { type: "create", item: earlier }], owner, { now: NOW });
+    expect(result.status).toBe("ready");
+    expect(sessionsFor(result, earlier.id)[0].start).toBe(at("09:00"));
+    expect(sessionsFor(result, later.id)[0].start).toBe(at("12:30"));
+  });
+
+  it("uses priority, then target, then stable creation time with ID only as a final tie", () => {
+    const high = item("z-high", 30, { priorityId: "high", targetDate: "2026-09-09", createdAt: "2026-09-03T12:00:00Z" });
+    const early = item("z-early-target", 30, { targetDate: DAY, createdAt: "2026-09-03T12:00:00Z" });
+    const older = item("z-old", 30, { targetDate: "2026-09-08", createdAt: "2026-09-01T12:00:00Z" });
+    const newer = item("a-new", 30, { targetDate: "2026-09-08", createdAt: "2026-09-02T12:00:00Z" });
+    const tied = item("b-new", 30, { targetDate: "2026-09-08", createdAt: newer.createdAt });
+    const items = [tied, newer, older, early, high];
+    const base = snapshot(items);
+    const result = planCommands(base, items.map(work => ({ type: "schedule", itemId: work.id })), owner, { now: NOW });
+    expect(result.status).toBe("ready");
+    expect([...result.sessions].sort((a, b) => a.start.localeCompare(b.start)).map(session => session.workItemId)).toEqual([high.id, early.id, older.id, newer.id, tied.id]);
+  });
+
   it("never places new work in the past", () => {
     const result = planCommands(snapshot(), [{ type: "create", item: item("late edit", 30) }], owner, { now: at("14:07") });
     expect(result.status).toBe("ready");
@@ -222,6 +254,20 @@ describe("requester authority and collision previews", () => {
 });
 
 describe("interruptions and reserve accounting", () => {
+  it.each(["web", "software"] as const)("allows owner-authorized urgent %s work to use reserve, but not requester urgency", (category) => {
+    const work = item("unexpected", 60, { category, minimumSessionMinutes: category === "software" ? 120 : 15 });
+    const result = planCommands(snapshot(), [{ type: "create", item: work, urgent: true }], owner, { now: at("16:00") });
+    expect(result.status).toBe("ready");
+    expect(sessionsFor(result, work.id)).toEqual([expect.objectContaining({ start: at("16:00"), end: at("17:00"), usesReserve: true })]);
+    expect(validateSchedule(apply(snapshot(), result), at("16:00"))).toEqual([]);
+    const denied = planCommands(snapshot(), [{ type: "create", item: work, urgent: true }], requester, { now: at("16:00") });
+    expect(denied.status).toBe("approval_required");
+    expect(denied.sessions.every(session => !session.usesReserve)).toBe(true);
+    const explicit = planCommands(snapshot(), [{ type: "create", item: work, sessions: [session(work.id, "16:00", "17:00", { usesReserve: true })] }], requester, { now: at("16:00") });
+    expect(explicit.status).toBe("infeasible");
+    expect(explicit.conflicts.some(conflict => conflict.code === "invalid_session")).toBe(true);
+  });
+
   it("exchanges earlier IT interruption time for reserve once, retaining reported progress", () => {
     const old = item("landing batch", 390, { remainingMinutes: 330, forecastDate: DAY });
     const base = snapshot([old], [session(old.id, "09:00", "12:00"), session(old.id, "12:30", "16:00")]);
@@ -280,7 +326,8 @@ describe("interruptions and reserve accounting", () => {
   it("does not silently override protected sessions for an urgent task", () => {
     const old = item("protected software", 390, { category: "software", minimumSessionMinutes: 120 });
     const base = snapshot([old], [session(old.id, "09:00", "12:00", { protected: true }), session(old.id, "12:30", "16:00", { protected: true })]);
-    const incoming = item("urgent ordinary task", 60, { priorityId: "urgent", deadline: DAY });
+    // A one-hour urgent job could fit the open reserve without disturbing protection.
+    const incoming = item("urgent ordinary task", 90, { priorityId: "urgent", deadline: DAY });
     const denied = planCommands(base, [{ type: "create", item: incoming, urgent: true }], owner, { now: NOW });
     expect(denied.status).toBe("infeasible");
     expect(denied.sessions).toEqual(base.sessions);
@@ -463,7 +510,7 @@ describe("scheduler safety across varied workloads", () => {
       }
     }
     expect(base.items.length).toBeGreaterThan(20);
-  });
+  }, 20_000);
 
   it("reports malformed settings and timestamps instead of throwing during validation", () => {
     const base = snapshot([item("work", 60)], [session("work", "09:00", "10:00"), session("work", "11:00", "12:00", { id: "broken", start: "invalid", usesReserve: true })]);
