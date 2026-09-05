@@ -1,0 +1,44 @@
+project_id = "ada-calendar"
+
+[api]
+enabled = true
+port = 55421
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 55422
+shadow_port = 55420
+major_version = 17
+
+[studio]
+enabled = true
+port = 55423
+
+[local_smtp]
+enabled = true
+port = 55424
+
+[storage]
+enabled = true
+file_size_limit = "20MiB"
+
+[analytics]
+enabled = false
+port = 55427
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["http://localhost:3000/api/auth/callback", "http://127.0.0.1:3000/api/auth/callback"]
+enable_signup = false
+
+[auth.email]
+# Keep the email provider enabled for invited accounts; global signup remains disabled.
+enable_signup = true
+enable_confirmations = true
+double_confirm_changes = true
+
+[functions.notification-worker]
+verify_jwt = false
