@@ -1,0 +1,84 @@
+export type Role = "owner" | "requester" | "viewer";
+export type Category = "web" | "it" | "landings" | "software";
+export type WorkStatus = "planned" | "in_progress" | "waiting" | "completed" | "cancelled";
+export interface Actor { id: string; name: string; email: string; role: Role }
+export interface Client { id: string; name: string; aliases: string[]; color?: string }
+export interface Priority { id: string; label: string; rank: number }
+export interface WorkspaceSettings {
+  name: string; timeZone: string; weekdays: number[]; dayStart: string; dayEnd: string;
+  lunchStart: string; lunchEnd: string; reserveStart: string; reserveMinutes: number; slotMinutes: number;
+  weeklyDay: number; weeklyTime: string; aiWarningUsd: number; aiLimitUsd: number;
+}
+export interface ChecklistItem { id: string; title: string; done: boolean }
+export interface WorkItem {
+  id: string; clientId: string; title: string; description: string; category: Category;
+  webKind: "edit" | "build" | null; requesterId: string | null; requestedBy: string;
+  priorityId: string; requestedPriorityId: string | null; status: WorkStatus;
+  estimatedMinutes: number | null; remainingMinutes: number | null;
+  windowStart: string; windowEnd: string | null; targetDate: string | null; deadline: string | null;
+  forecastDate: string | null; completedAt: string | null; blockedReason: string | null;
+  minimumSessionMinutes: number; allowedDates: string[]; checklist: ChecklistItem[];
+  progressTotal: number | null; progressCompleted: number; updateDate: string | null;
+  references: string[]; createdAt: string; updatedAt: string;
+}
+export interface WorkSession {
+  id: string; workItemId: string; start: string; end: string; protected: boolean;
+  status: "planned" | "completed" | "cancelled"; usesReserve: boolean;
+}
+export interface UnavailableBlock { id: string; title: string; start: string; end: string; kind: "meeting" | "time_off" }
+export interface ScheduleSnapshot {
+  workspaceId: string; version: number; settings: WorkspaceSettings; clients: Client[];
+  priorities: Priority[]; items: WorkItem[]; sessions: WorkSession[]; blocks: UnavailableBlock[];
+}
+export type WorkCommand =
+  | { type: "create"; item: WorkItem; sessions?: WorkSession[]; urgent?: boolean; overrideProtected?: boolean; overrideDeadline?: boolean }
+  | { type: "update"; itemId: string; patch: Partial<WorkItem>; overrideProtected?: boolean; overrideDeadline?: boolean }
+  | { type: "schedule"; itemId: string; sessions?: WorkSession[]; urgent?: boolean; overrideProtected?: boolean; overrideDeadline?: boolean }
+  | { type: "move"; sessionId: string; start: string; end: string; overrideProtected?: boolean; overrideDeadline?: boolean }
+  | { type: "progress"; itemId: string; remainingMinutes?: number; progressCompleted?: number; checklist?: ChecklistItem[] }
+  | { type: "complete_session"; sessionId: string; remainingMinutes?: number }
+  | { type: "status"; itemId: string; status: WorkStatus; reason?: string; remainingMinutes?: number; overrideProtected?: boolean }
+  | { type: "client_update"; itemId: string; message: string }
+  | { type: "block"; block: UnavailableBlock; remove?: boolean; overrideProtected?: boolean; overrideDeadline?: boolean };
+export interface ScheduleConflict { code: string; message: string; itemIds: string[] }
+export interface ScheduleAlternative { start: string; end: string; label: string; sessions: WorkSession[] }
+export interface ScheduleProposal {
+  id: string; operationId: string; baseVersion: number; actorId: string; commands: WorkCommand[];
+  status: "ready" | "approval_required" | "infeasible"; requiresApproval: boolean;
+  items: WorkItem[]; sessions: WorkSession[]; blocks: UnavailableBlock[];
+  affectedItemIds: string[]; summary: string[]; conflicts: ScheduleConflict[];
+  alternatives: ScheduleAlternative[]; createdAt: string;
+}
+export interface WorkEvent {
+  id: string; operationId: string; actorId: string; actorName: string; type: string;
+  summary: string[]; itemIds: string[]; createdAt: string; version: number;
+  before: { items: WorkItem[]; sessions: WorkSession[]; blocks: UnavailableBlock[] };
+  after: { items: WorkItem[]; sessions: WorkSession[]; blocks: UnavailableBlock[] };
+  undoneBy: string | null;
+}
+export interface PendingRequest {
+  id: string; requesterId: string; requesterName: string; proposal: ScheduleProposal;
+  status: "pending" | "approved" | "declined" | "needs_information";
+  note: string; createdAt: string; resolvedAt: string | null;
+}
+export interface Notification {
+  id: string; eventId: string; recipient: string; recipientName: string; subject: string; body: string;
+  status: "queued" | "captured" | "sent" | "delivered" | "failed" | "uncertain" | "bounced";
+  attempts: number; providerId: string | null; createdAt: string; lastError: string | null;
+}
+export interface Attachment {
+  id: string; workItemId: string; name: string; contentType: string; size: number; path: string;
+  uploadedBy: string; createdAt: string; removedAt: string | null;
+}
+export interface EmailDraft { id: string; authorId: string; itemId: string | null; subject: string; body: string; status: "draft" | "sent" | "dismissed"; createdAt: string }
+export interface AppState extends ScheduleSnapshot {
+  actor: Actor; members: Actor[]; requests: PendingRequest[]; events: WorkEvent[];
+  notifications: Notification[]; attachments: Attachment[]; emailDrafts: EmailDraft[];
+  aiUsageUsd: number; mode: "demo" | "live";
+}
+export interface Interpretation {
+  kind: "commands" | "clarification" | "email_draft" | "answer" | "undo";
+  message: string; commands: WorkCommand[];
+  emailDraft?: { itemId: string | null; subject: string; body: string };
+  usage?: { inputTokens: number; outputTokens: number; costUsd: number };
+}
