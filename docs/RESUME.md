@@ -1,6 +1,20 @@
 # ADA Calendar — current handoff
 
-## September 7, 2026 — single real environment and clarification fix
+## September 7, 2026 — first hosted database deployment checkpoint
+
+This section supersedes the historical setup instructions below. Continue with **one real Supabase project named ADA Calendar and one Railway application**, not separate hosted staging.
+
+- Application commit `670567d` is pushed to public GitHub `tito3288/ADA-Calendar` on `main`. Both jobs in [GitHub Actions run 34135186046](https://github.com/tito3288/ADA-Calendar/actions/runs/34135186046) passed, including the production build and isolated browser workflows.
+- Bryan created the real Supabase project. Its overview showed Healthy and no migrations before the integration was enabled.
+- Bryan saved the GitHub integration with repository `tito3288/ADA-Calendar`, working directory `.`, Deploy to production enabled, production branch `main`, and Automatic branching disabled. The success toast confirms saved settings, not a completed database deployment.
+- Bryan explicitly authorized a setup-documentation commit and push to trigger the first production deployment. No application code, migration, or provider credentials are changed by this checkpoint. The local development server's generated `next-env.d.ts` change is intentionally excluded.
+- Before this checkpoint, GitHub showed the successful application CI checks but no Supabase deployment check. Hosted migration success has **not** yet been verified. The seven migrations previously passed local database checks; do not reset the real database or apply them through a second deployment path while GitHub deployment is unresolved.
+
+**Next:** push this checkpoint and inspect the Supabase deployment and migration history. Once schema deployment is confirmed, continue hosted Auth/owner setup, Railway GitHub connection and secure environment variables, OpenAI, Resend, and real integration testing. Keep setup email captured or explicitly allowlisted. No Railway deployment, real-model evaluation, live delivery, or backup/Storage restore is claimed complete.
+
+---
+
+## Historical September 7, 2026 — single real environment and clarification fix
 
 Bryan explicitly chose **one real Supabase project named ADA Calendar and one Railway application**, without separate hosted staging. Keep this choice; do not ask him to recreate projects just for a staging label. Local automated tests remain isolated and never send real mail.
 
