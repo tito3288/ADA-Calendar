@@ -1,13 +1,12 @@
 import type { ReactNode } from "react";
 import { CalendarDays, LockKeyhole } from "lucide-react";
+import { BrandLogo } from "./brand-logo";
 
 export function AuthShell({ children }: { children: ReactNode }) {
   return (
     <main className="signin">
       <div className="signin-card">
-        <div className="brand-mark">
-          a<span>.</span>
-        </div>
+        <BrandLogo variant="auth" />
         <p className="eyebrow">ADA CALENDAR</p>
         <h1>
           Room for

@@ -49,6 +49,7 @@ import { WorkDetails } from "./work-details";
 import { AssistantPanel } from "./assistant-panel";
 import { SettingsPanel } from "./settings-panel";
 import { RequestReview, RequestAttachments } from "./request-review";
+import { BrandLogo } from "./brand-logo";
 
 type Section = "calendar" | "work" | "requests" | "updates";
 function DraftCard({
@@ -316,12 +317,8 @@ export function Workspace({ initialState }: { initialState: AppState }) {
       )}
       <aside className={`sidebar ${mobileNav ? "nav-open" : ""}`}>
         <Link className="brand" href="/" aria-label="ADA Calendar home">
-          <span className="brand-mark">
-            a<span>.</span>
-          </span>
-          <span>
-            ADA<span>CALENDAR</span>
-          </span>
+          <BrandLogo variant="sidebar" />
+          <span className="brand-product">ADA CALENDAR</span>
         </Link>
         <div className="workspace-label">
           <span className="online-dot" />

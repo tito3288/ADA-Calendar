@@ -392,44 +392,28 @@ small {
 }
 .brand {
   display: flex;
-  gap: 10px;
-  align-items: center;
-  margin-bottom: 26px;
+  flex-direction: column;
+  gap: 11px;
+  align-items: flex-start;
+  margin-bottom: 24px;
   padding: 0 5px;
 }
-.brand-mark {
-  background: #c3e9d4;
-  color: #193e2c;
-  width: 33px;
-  height: 35px;
-  border-radius: 9px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 31px;
-  line-height: 1;
-  font-weight: 750;
-  letter-spacing: -3px;
-  padding-right: 2px;
-  padding-bottom: 5px;
-  font-family: Georgia, serif;
-}
-.brand-mark span {
-  color: #588568;
-  font-size: 24px;
-}
-.brand > span:last-child {
-  font-size: 17px;
-  letter-spacing: 2.8px;
-  line-height: 1.1;
-  font-weight: 650;
-}
-.brand > span:last-child > span {
+.brand-logo {
   display: block;
-  font-size: 7px;
+  width: 160px;
+  max-width: 100%;
+  height: auto;
+}
+.brand-logo--auth {
+  width: 190px;
+}
+.brand-product {
+  display: block;
+  font-size: 8px;
+  font-weight: 600;
+  line-height: 1.4;
   letter-spacing: 2.2px;
-  color: #8e9c94;
-  margin-top: 5px;
+  color: #a4b0aa;
 }
 .workspace-label {
   display: flex;
@@ -2078,8 +2062,8 @@ small {
   margin: auto;
   padding: 45px 30px;
 }
-.signin-card > .brand-mark {
-  margin-bottom: 35px;
+.signin-card > .brand-logo {
+  margin-bottom: 28px;
 }
 .signin-card h1 {
   font-size: 61px;
