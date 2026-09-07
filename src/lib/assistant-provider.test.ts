@@ -1,0 +1,35 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDemoState, DEMO_MEMBERS } from "./fixtures";
+import { nextContinuation } from "./assistant-conversation";
+import { assistantReservationUsd, emptyAssistantAction, interpretInput } from "./server/assistant";
+
+const provider = vi.hoisted(() => ({ parse: vi.fn() }));
+vi.mock("openai", async importOriginal => {
+  const actual = await importOriginal<typeof import("openai")>();
+  return { ...actual, default: class { responses = { parse: provider.parse }; } };
+});
+afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
+
+describe("Responses adapter follow-up context (mocked provider, no paid calls)", () => {
+  it("sends retained task/date plus latest short answer and validates their combined evidence", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "offline-provider-test-placeholder");
+    const now = new Date("2026-09-07T14:00:00Z");
+    const state = createDemoState(now.toISOString());
+    const text = "Add IT work for Higher Ground Tree: fix form, on 2026-09-08";
+    const continuation = nextContinuation(text, { kind: "clarification", message: "How many hours?", commands: [] }, now)!;
+    const evidence = `${text}\nTwo hours`;
+    provider.parse.mockResolvedValueOnce({ output_parsed: { kind: "commands", message: "Prepared", actions: [{ ...emptyAssistantAction("create", evidence), clientName: "Higher Ground Tree", title: "Fix form", category: "it", estimatedMinutes: 120, windowStart: "2026-09-08", windowEnd: "2026-09-08" }], draft: null }, usage: { input_tokens: 500, output_tokens: 200 } });
+    const result = await interpretInput("Two hours", state, DEMO_MEMBERS[0], { continuation, now });
+    expect(result.commands[0]).toMatchObject({ type: "create", item: { clientId: "higher-ground", estimatedMinutes: 120, windowStart: "2026-09-08" } });
+    expect(provider.parse).toHaveBeenCalledWith(expect.objectContaining({ model: "gpt-5.6-sol", store: false, input: [expect.objectContaining({ role: "developer", content: expect.stringContaining('"question":"How many hours?"') }), { role: "user", content: evidence }] }));
+    expect(assistantReservationUsd("Two hours", state, continuation)).toBeGreaterThanOrEqual(assistantReservationUsd("Two hours", state));
+  });
+  it("does not use the assistant's question as evidence for invented user effort", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "offline-provider-test-placeholder");
+    const now = new Date("2026-09-07T14:00:00Z");
+    const text = "Add IT work for Higher Ground Tree on 2026-09-08";
+    const continuation = nextContinuation(text, { kind: "clarification", message: "Will it take 4 hours?", commands: [] }, now)!;
+    provider.parse.mockResolvedValueOnce({ output_parsed: { kind: "commands", message: "Prepared", actions: [{ ...emptyAssistantAction("create", "Will it take 4 hours?"), clientName: "Higher Ground Tree", title: "Fix form", category: "it", estimatedMinutes: 240 }], draft: null } });
+    expect((await interpretInput("Not sure", createDemoState(now.toISOString()), DEMO_MEMBERS[0], { continuation, now })).commands).toEqual([]);
+  });
+});

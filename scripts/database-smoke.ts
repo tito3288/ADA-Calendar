@@ -92,6 +92,43 @@ async function main() {
     assert.equal(checked(await admin.rpc("begin_ai_operation", aiArgs)).data.status, "completed");
     assert.equal(checked(await sessions.get(kyle.id)!.from("ai_operations").select("id")).data!.length, 0, "AI results stay private to their author.");
     assert.ok((await admin.rpc("begin_ai_operation", { ...aiArgs, p_id: randomUUID(), p_reserve_usd: 100 })).error, "Budget must reject oversized reservations.");
+    const followupParentId = randomUUID();
+    const parentArgs = { ...aiArgs, p_id: followupParentId };
+    checked(await admin.rpc("begin_ai_operation", parentArgs));
+    assert.ok((await admin.rpc("begin_ai_operation", { ...aiArgs, p_id: randomUUID(), p_parent_id: followupParentId })).error, "An in-flight operation cannot become clarification context.");
+    const clarification = { interpretation: { kind: "clarification", message: "How many hours?" }, continuation: { turns: [{ userText: "Schedule work for Test Client tomorrow", question: "How many hours?" }], startedAt: now } };
+    checked(await admin.rpc("finish_ai_operation", { p_actor: owner.id, p_id: followupParentId, p_result: clarification, p_cost_usd: 0.01 }));
+    assert.deepEqual(checked(await ai.from("ai_operations").select("result").eq("id", followupParentId).single()).data!.result, clarification);
+    assert.equal(checked(await sessions.get(kyle.id)!.from("ai_operations").select("result").eq("id", followupParentId)).data!.length, 0, "Clarification text stays private to its author.");
+    checked(await admin.from("workspace_members").update({ active: false }).eq("workspace_id", workspaceId).eq("user_id", owner.id));
+    try {
+      assert.equal(checked(await ai.from("ai_operations").select("result").eq("id", followupParentId)).data!.length, 0, "Revoked members lose access to their prior private context.");
+      assert.ok((await admin.rpc("begin_ai_operation", { ...aiArgs, p_id: randomUUID(), p_parent_id: followupParentId })).error, "Revoked membership cannot continue an operation.");
+    } finally {
+      checked(await admin.from("workspace_members").update({ active: true }).eq("workspace_id", workspaceId).eq("user_id", owner.id));
+    }
+    assert.ok((await admin.rpc("begin_ai_operation", { ...aiArgs, p_actor: kyle.id, p_id: randomUUID(), p_parent_id: followupParentId })).error, "Even trusted calls cannot continue another author's clarification.");
+    assert.ok((await admin.rpc("begin_ai_operation", { ...aiArgs, p_kind: "transcribe", p_id: randomUUID(), p_parent_id: followupParentId })).error, "Transcription cannot consume a clarification.");
+    assert.ok((await admin.rpc("begin_ai_operation", { ...aiArgs, p_id: randomUUID(), p_parent_id: aiId })).error, "Answers and completed commands are not clarification context.");
+    const selfId = randomUUID();
+    assert.ok((await admin.rpc("begin_ai_operation", { ...aiArgs, p_id: selfId, p_parent_id: selfId })).error, "An operation cannot continue itself.");
+    const competingReplies = [randomUUID(), randomUUID()].map(id => ({ ...aiArgs, p_id: id, p_parent_id: followupParentId }));
+    const replyOutcomes = await Promise.all(competingReplies.map(args => admin.rpc("begin_ai_operation", args)));
+    assert.equal(replyOutcomes.filter(outcome => !outcome.error).length, 1, "Only one competing reply may consume the clarification.");
+    const replyWinner = replyOutcomes[0].error ? competingReplies[1] : competingReplies[0];
+    const replyLoser = replyOutcomes[0].error ? competingReplies[0] : competingReplies[1];
+    assert.equal(checked(await admin.from("ai_usage").select("id", { count: "exact", head: true }).eq("reservation_id", replyLoser.p_id)).count, 0, "Rejected competing replies do not reserve budget.");
+    assert.equal(checked(await admin.rpc("begin_ai_operation", replyWinner)).data.status, "processing", "Identical in-flight replies retain their idempotent status.");
+    assert.ok((await admin.rpc("begin_ai_operation", { ...replyWinner, p_parent_id: null })).error, "A retry cannot omit or replace its parent context.");
+    assert.ok((await admin.rpc("begin_ai_operation", { ...replyWinner, p_input_hash: "b".repeat(64) })).error, "A retry cannot change its reply text.");
+    checked(await admin.rpc("finish_ai_operation", { p_actor: owner.id, p_id: replyWinner.p_id, p_result: null, p_error: "Synthetic uncertain provider result" }));
+    assert.equal(checked(await admin.rpc("begin_ai_operation", replyWinner)).data.status, "failed", "Failed replies stay consumed and idempotent rather than branching into duplicate work.");
+    assert.ok((await admin.rpc("begin_ai_operation", replyLoser)).error, "A failed reply does not authorize a second child.");
+    assert.equal(checked(await admin.rpc("begin_ai_operation", parentArgs)).data.status, "completed", "The original clarification also remains replayable.");
+    const missingContextId = randomUUID();
+    checked(await admin.rpc("begin_ai_operation", { ...aiArgs, p_id: missingContextId }));
+    checked(await admin.rpc("finish_ai_operation", { p_actor: owner.id, p_id: missingContextId, p_result: { interpretation: clarification.interpretation }, p_cost_usd: 0.01 }));
+    assert.ok((await admin.rpc("begin_ai_operation", { ...aiArgs, p_id: randomUUID(), p_parent_id: missingContextId })).error, "Legacy clarification output without saved continuation cannot be resumed.");
     const attachmentId = randomUUID();
     const filePath = `${workspaceId}/${state.items[0].id}/${attachmentId}/brief.md`;
     const metadata = { id: attachmentId, workItemId: state.items[0].id, name: "brief.md", contentType: "text/markdown", size: 4, path: filePath, uploadedBy: owner.id, createdAt: now, removedAt: null };
@@ -228,7 +265,7 @@ async function main() {
     }
     assert.equal((checked(await ai.rpc("read_schedule_snapshot")).data as ScheduleSnapshot).sessions.length, fullCount + 1, "Committing after 1,000 history rows must preserve every row.");
     for (const job of checked(await admin.rpc("claim_notifications", { p_limit: 20 })).data as Array<{ id: string }>) checked(await admin.rpc("finish_notification", { p_id: job.id, p_status: "captured" }));
-    console.log("PASS: real Auth/RLS; guarded requester permissions; clean-fit/atomic outbox/retries; concurrent stale and overlap rejection; AI privacy/budget; private ready/pending uploads; queue/webhook races; protected completion; owner-only reserve; weekly dedup; atomic coherent snapshot above 1,000 history rows with lossless subsequent commit. No external email sent.");
+    console.log("PASS: real Auth/RLS; guarded requester permissions; clean-fit/atomic outbox/retries; concurrent stale and overlap rejection; AI privacy/budget and single-use private clarification replies; private ready/pending uploads; queue/webhook races; protected completion; owner-only reserve; weekly dedup; atomic coherent snapshot above 1,000 history rows with lossless subsequent commit. No external email sent.");
   } finally {
     // Scope every removal to the random workspace created by this script.
     if (uploadedPaths.length) await admin.storage.from("work-attachments").remove(uploadedPaths);

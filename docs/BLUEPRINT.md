@@ -6,6 +6,8 @@ Bryan wears four hats: Web (edits/builds), IT, Landings, and Software. Kyle, Wil
 
 **Deployment correction:** Railway replaces Vercel. Use native Next.js App Router, React, TypeScript, Tailwind and a Node 24 container. Supabase remains the database/auth/private storage/queue platform; Resend provides mail. Do not provision paid accounts or send real stakeholder mail from tests.
 
+**September 7 environment decision:** Bryan will use one real Supabase project named **ADA Calendar** and one Railway application, connected to the existing public GitHub repository `tito3288/ADA-Calendar`. A separate hosted staging project/application is not required. Verify the real integrations in this environment while retaining isolated local automated tests and captured or explicitly allowlisted email until Bryan authorizes normal live delivery. Review the selected Supabase GitHub integration's automatic deployment settings before further pushes. Source visibility does not change invite-only application access; secrets and workload data never belong in Git. Recovery rehearsal may use an isolated local Supabase instance and remains a separate, unverified release check.
+
 ## Locked product decisions
 
 - Timezone America/Indiana/Indianapolis; weekdays 9–17, lunch 12–12:30, interruption reserve 16–17; ordinary project capacity 390 minutes/day. Settings editable by Bryan.

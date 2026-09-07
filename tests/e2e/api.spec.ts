@@ -97,6 +97,41 @@ test("future-tense client communication remains a private draft until explicitly
   expect((await state(request)).emailDrafts).toEqual([]);
 });
 
+test("clarification and its retried short reply commit only one task and notification event", async ({ request }) => {
+  await asActor(request, "bryan");
+  const before = await state(request);
+  const date = futureDate(before, 126);
+  const title = "E2E retry clarification task";
+  const operationId = crypto.randomUUID();
+  const pendingResponse = await post(request, "assistant", { text: `Add IT work for Higher Ground Tree: ${title}, on ${date}`, operationId });
+  expect(pendingResponse.ok(), await pendingResponse.text()).toBe(true);
+  const pending = await pendingResponse.json();
+  expect(pending.interpretation.kind).toBe("clarification");
+  expect(pending.replyToOperationId).toBe(operationId);
+  expect(pending.state.version).toBe(before.version);
+  expect(pending.state.events).toHaveLength(before.events.length);
+  expect(pending.state.notifications).toHaveLength(before.notifications.length);
+  const reply = { text: "Two hours", operationId: crypto.randomUUID(), replyToOperationId: pending.replyToOperationId };
+  const response = await post(request, "assistant", reply);
+  expect(response.ok(), await response.text()).toBe(true);
+  const result = await response.json();
+  expect(result.interpretation.kind).toBe("commands");
+  expect(result.replyToOperationId).toBeNull();
+  const retried = await post(request, "assistant", reply);
+  expect(retried.ok(), await retried.text()).toBe(true);
+  expect((await retried.json()).replyToOperationId).toBeNull();
+  const after = await state(request);
+  const matches = after.items.filter(item => item.title === title);
+  expect(matches).toHaveLength(1);
+  expect(matches[0]).toMatchObject({ clientId: "higher-ground", category: "it", estimatedMinutes: 120, remainingMinutes: 120, windowStart: date, windowEnd: date });
+  expect(after.version).toBe(before.version + 1);
+  expect(after.events).toHaveLength(before.events.length + 1);
+  const event = after.events.find(event => event.operationId === reply.operationId)!;
+  expect(event.itemIds).toContain(matches[0].id);
+  expect(after.notifications.filter(notification => notification.eventId === event.id).map(notification => notification.recipient).sort()).toEqual(["kyle@example.test", "william@example.test"]);
+  expect(after.notifications.every(notification => notification.status === "captured")).toBe(true);
+});
+
 test("mutation requests require a verified same-site origin", async ({ request }) => {
   const response = await request.post("/api/demo/actor", { data: { id: "william" } });
   expect(response.ok()).toBe(false);

@@ -1,8 +1,8 @@
 import "server-only";
 import { cookies } from "next/headers";
-import { demoActor, demoEnabled, getDemoState, commitDemoProposal, submitDemoRequest, resolveDemoRequest, undoDemoEvent, mutateDemoAdmin, beginDemoAIOperation, finishDemoAIOperation } from "./demo-store";
+import { demoActor, demoEnabled, getDemoState, commitDemoProposal, submitDemoRequest, resolveDemoRequest, undoDemoEvent, mutateDemoAdmin, beginDemoAIOperation, finishDemoAIOperation, getDemoAIOperation } from "./demo-store";
 import { getLiveActor } from "./auth";
-import { getLiveState, commitLiveProposal, submitLiveRequest, resolveLiveRequest, undoLiveEvent, mutateLiveAdmin, beginLiveAIOperation, finishLiveAIOperation } from "./live-store";
+import { getLiveState, commitLiveProposal, submitLiveRequest, resolveLiveRequest, undoLiveEvent, mutateLiveAdmin, beginLiveAIOperation, finishLiveAIOperation, getLiveAIOperation } from "./live-store";
 
 export { demoEnabled };
 export async function currentActor() {
@@ -16,5 +16,6 @@ export const store = {
   undo: async (...args: Parameters<typeof undoLiveEvent>) => demoEnabled() ? undoDemoEvent(...args) : undoLiveEvent(...args),
   admin: async (...args: Parameters<typeof mutateLiveAdmin>) => demoEnabled() ? mutateDemoAdmin(...args) : mutateLiveAdmin(...args),
   beginAI: async (...args: Parameters<typeof beginDemoAIOperation>) => demoEnabled() ? beginDemoAIOperation(...args) : beginLiveAIOperation(...args),
+  getAI: async (...args: Parameters<typeof getDemoAIOperation>) => demoEnabled() ? getDemoAIOperation(...args) : getLiveAIOperation(...args),
   finishAI: async (...args: Parameters<typeof finishDemoAIOperation>) => demoEnabled() ? finishDemoAIOperation(...args) : finishLiveAIOperation(...args),
 };

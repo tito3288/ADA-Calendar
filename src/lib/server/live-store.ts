@@ -6,6 +6,7 @@ import { buildCommitNotifications, buildDraftNotifications, buildRequestNotifica
 import { assertLiveActor, requireOwner } from "./auth";
 import { getSupabaseAdminClient, getSupabaseServerClient } from "./supabase";
 import { assertReviewedProposal } from "./preview";
+import type { AIOperationInput, AIOperationResult, PrivateAIOperation } from "./demo-store";
 
 function check(error: { message: string } | null, operation: string) {
   if (error) throw new Error(`${operation}: ${error.message}`);
@@ -184,10 +185,20 @@ export async function mutateLiveAdmin(actor: Actor, action: LiveAdminAction): Pr
   return getLiveState(trusted.id);
 }
 
-export async function beginLiveAIOperation(actor: Actor, input: { id: string; kind: "assistant" | "transcribe"; inputHash: string; reserveUsd: number }): Promise<{ status: "claimed" | "processing" | "completed" | "failed"; result: unknown }> {
+export async function getLiveAIOperation(actor: Actor, id: string): Promise<PrivateAIOperation> {
+  const trusted = await assertLiveActor(actor);
+  // Use the signed-in client: RLS also binds the private result to active workspace membership.
+  const db = await getSupabaseServerClient();
+  const { data, error } = await db.from("ai_operations").select("kind,status,result").eq("id", id).eq("actor_id", trusted.id).maybeSingle();
+  check(error, "Read assistant operation");
+  if (!data) throw new Error("AI operation is unavailable to this account.");
+  return data as PrivateAIOperation;
+}
+
+export async function beginLiveAIOperation(actor: Actor, input: AIOperationInput): Promise<AIOperationResult> {
   const trusted = await assertLiveActor(actor);
   const db = getSupabaseAdminClient();
-  const { data, error } = await db.rpc("begin_ai_operation", { p_actor: trusted.id, p_id: input.id, p_kind: input.kind, p_input_hash: input.inputHash, p_reserve_usd: input.reserveUsd });
+  const { data, error } = await db.rpc("begin_ai_operation", { p_actor: trusted.id, p_id: input.id, p_kind: input.kind, p_input_hash: input.inputHash, p_reserve_usd: input.reserveUsd, p_parent_id: input.parentId ?? null });
   check(error, "Begin assistant operation");
   return data;
 }

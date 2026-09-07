@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDemoState, DEMO_MEMBERS } from "./fixtures";
 import { compileInterpretation, emptyAssistantAction, inspectAudioRecording, interpretInput, transcribeAudio } from "./server/assistant";
+import { nextContinuation } from "./assistant-conversation";
 
 const now = new Date("2026-09-07T12:00:00Z");
 const context = () => createDemoState(now.toISOString());
@@ -8,6 +9,46 @@ const proposal = (action: ReturnType<typeof emptyAssistantAction>) => ({ kind: "
 afterEach(() => vi.unstubAllEnvs());
 
 describe("assistant interpretation safety", () => {
+  it("asks for effort and resolves a short answer against the original client and dates", async () => {
+    const text = "Add IT work for Higher Ground Tree: Fix form, on 2026-09-08";
+    const first = await interpretInput(text, context(), DEMO_MEMBERS[0], { demo: true, now });
+    expect(first.kind).toBe("clarification");
+    expect(first.commands).toEqual([]);
+    const continuation = nextContinuation(text, first, now)!;
+    const answer = await interpretInput("Two hours", context(), DEMO_MEMBERS[0], { demo: true, now, continuation });
+    expect(answer.commands[0]).toMatchObject({ type: "create", item: { title: "Fix form", clientId: "higher-ground", estimatedMinutes: 120, windowStart: "2026-09-08" } });
+  });
+  it("discards a pending instruction when the user says never mind", async () => {
+    const continuation = nextContinuation("Add IT for Higher Ground Tree", { kind: "clarification", message: "How long?", commands: [] }, now)!;
+    const result = await interpretInput("Never mind", context(), DEMO_MEMBERS[0], { demo: true, now, continuation });
+    expect(result.kind).toBe("answer");
+    expect(result.commands).toEqual([]);
+  });
+  it("does not recycle earlier override permission when answering a clarification", () => {
+    const original = "Schedule Higher Ground Tree. Override protected time.";
+    const action = { ...emptyAssistantAction("schedule", original), clientName: "Higher Ground Tree" };
+    const result = compileInterpretation(proposal(action), `${original}\nTwo hours`, context(), DEMO_MEMBERS[0], now, "Two hours");
+    expect(result.commands[0]).not.toHaveProperty("overrideProtected");
+  });
+  it("accepts a corrected weekday/date from the latest reply without trusting a new contradiction", () => {
+    const original = "Add IT work for Higher Ground Tree: fix form, 2 hours on Monday 2026-09-09";
+    const reply = "Use Wednesday 2026-09-09";
+    const text = `${original}\n${reply}`;
+    const action = { ...emptyAssistantAction("create", text), clientName: "Higher Ground Tree", title: "Fix form", category: "it" as const, estimatedMinutes: 120, windowStart: "2026-09-09", windowEnd: "2026-09-09" };
+    expect(compileInterpretation(proposal(action), text, context(), DEMO_MEMBERS[0], now, reply).kind).toBe("commands");
+    const invalid = "Use Tuesday 2026-09-09";
+    expect(compileInterpretation(proposal({ ...action, sourceQuote: `${original}\n${invalid}` }), `${original}\n${invalid}`, context(), DEMO_MEMBERS[0], now, invalid).kind).toBe("clarification");
+  });
+  it("retains a corrected date through another question about effort", async () => {
+    const original = "Add IT work for Higher Ground Tree: Fix form, on Monday 2026-09-09";
+    const first = await interpretInput(original, context(), DEMO_MEMBERS[0], { demo: true, now });
+    const pending = nextContinuation(original, first, now)!;
+    const correction = "Use Wednesday 2026-09-09";
+    const second = await interpretInput(correction, context(), DEMO_MEMBERS[0], { demo: true, now, continuation: pending });
+    expect(second.kind).toBe("clarification");
+    const ready = await interpretInput("Two hours", context(), DEMO_MEMBERS[0], { demo: true, now, continuation: nextContinuation(correction, second, now, pending)! });
+    expect(ready.commands[0]).toMatchObject({ type: "create", item: { windowStart: "2026-09-09", estimatedMinutes: 120 } });
+  });
   it("creates a grounded demo task while distinguishing two dates from two hours", async () => {
     const text = "Add IT work for Higher Ground Tree: fix the form, 2 hours from 2026-09-08 to 2026-09-09";
     const state = context();

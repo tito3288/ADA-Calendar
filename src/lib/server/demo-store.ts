@@ -10,10 +10,11 @@ import { buildCommitNotifications, buildDraftNotifications, buildRequestNotifica
 import { attachmentPath, canAccessAttachmentWork, validateUpload } from "./uploads";
 import { assertReviewedProposal } from "./preview";
 
-export type AIOperationInput = { id: string; kind: "assistant" | "transcribe"; inputHash: string; reserveUsd: number };
+export type AIOperationInput = { id: string; kind: "assistant" | "transcribe"; inputHash: string; reserveUsd: number; parentId?: string };
 export type AIOperationResult = { status: "claimed" | "processing" | "completed" | "failed"; result: unknown | null };
+export type PrivateAIOperation = { kind: string; status: "processing" | "completed" | "failed"; result: unknown };
 type Reservation = { actorId: string; amountUsd: number; settled: boolean };
-type StoredAIOperation = { actorId: string; kind: string; inputHash: string; status: "processing" | "completed" | "failed"; result: unknown | null };
+type StoredAIOperation = PrivateAIOperation & { actorId: string; workspaceId: string; inputHash: string; parentId?: string };
 type StoredState = AppState & { aiReservations?: Record<string, Reservation>; aiMonth?: string; aiOperations?: Record<string, StoredAIOperation>; operationHashes?: Record<string, string>; pendingAttachmentIds?: string[] };
 const globalStore = globalThis as unknown as { adaWriteQueue?: Promise<unknown> };
 export function demoEnabled() { return process.env.NODE_ENV !== "production" && process.env.ADA_DEMO_MODE === "true"; }
@@ -271,15 +272,31 @@ export function beginDemoAIOperation(actor: Actor, input: AIOperationInput): Pro
     state.aiOperations ??= {};
     const prior = state.aiOperations[input.id];
     if (prior) {
-      if (prior.actorId !== actor.id || prior.inputHash !== input.inputHash || prior.kind !== input.kind) throw new Error("Operation ID belongs to a different request.");
+      if (prior.actorId !== actor.id || prior.workspaceId !== state.workspaceId || prior.inputHash !== input.inputHash || prior.kind !== input.kind || prior.parentId !== input.parentId) throw new Error("Operation ID belongs to a different request.");
       return { status: prior.status, result: prior.result };
+    }
+    if (input.parentId !== undefined) {
+      const parent = state.aiOperations[input.parentId];
+      const result = parent?.result as { interpretation?: { kind?: unknown }; continuation?: unknown } | null;
+      if (input.id === input.parentId || input.kind !== "assistant" || !parent || parent.actorId !== actor.id || parent.workspaceId !== state.workspaceId || parent.kind !== "assistant" || parent.status !== "completed" || result?.interpretation?.kind !== "clarification" || !result.continuation || typeof result.continuation !== "object" || Array.isArray(result.continuation)) {
+        throw new Error("This clarification is not available to continue.");
+      }
+      if (Object.values(state.aiOperations).some(operation => operation.parentId === input.parentId)) throw new Error("This clarification already has a reply. Continue from the latest question or start a new request.");
     }
     // Demo calls have no provider cost; tests may exercise the real budget gate.
     if (input.reserveUsd > 0) reserveAI(state, actor, input.id, input.reserveUsd);
     else if (input.reserveUsd !== 0) throw new Error("Invalid AI reservation.");
-    state.aiOperations[input.id] = { actorId: actor.id, kind: input.kind, inputHash: input.inputHash, status: "processing", result: null };
+    state.aiOperations[input.id] = { actorId: actor.id, workspaceId: state.workspaceId, kind: input.kind, inputHash: input.inputHash, parentId: input.parentId, status: "processing", result: null };
     return { status: "claimed", result: null };
   });
+}
+export function getDemoAIOperation(actor: Actor, id: string): Promise<PrivateAIOperation> {
+  return demoTransaction(state => {
+    trustedActor(state, actor);
+    const operation = state.aiOperations?.[id];
+    if (!operation || operation.actorId !== actor.id || operation.workspaceId !== state.workspaceId) throw new Error("AI operation is unavailable to this account.");
+    return { kind: operation.kind, status: operation.status, result: operation.result };
+  }, false);
 }
 export function finishDemoAIOperation(actor: Actor, id: string, result: unknown, costUsd?: number, error?: string) {
   return demoTransaction(state => {

@@ -25,6 +25,7 @@ export function AssistantPanel({
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const alive = useRef(true);
   const [operationId, setOperationId] = useState(() => crypto.randomUUID());
+  const [replyToOperationId, setReplyToOperationId] = useState<string | null>(null);
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -44,7 +45,8 @@ export function AssistantPanel({
         interpretation: Interpretation;
         state: AppState;
         proposal?: ScheduleProposal;
-      }>("assistant", { text, operationId });
+        replyToOperationId: string | null;
+      }>("assistant", { text, operationId, ...(replyToOperationId ? { replyToOperationId } : {}) });
       setMessages((m) => [
         ...m,
         { author: state.actor.name, text },
@@ -53,6 +55,7 @@ export function AssistantPanel({
       onState(r.state);
       setProposal(r.proposal?.status !== "ready" ? (r.proposal ?? null) : null);
       setUndo(r.interpretation.kind === "undo");
+      setReplyToOperationId(r.replyToOperationId);
       setText("");
       setOperationId(crypto.randomUUID());
     } catch (e) {
@@ -202,6 +205,19 @@ export function AssistantPanel({
         </button>
       )}
       <form onSubmit={submit} className="assistant-composer">
+        {replyToOperationId && (
+          <div className="demo-note">
+            <p>Your reply will continue the pending instruction above.</p>
+            <button type="button" className="secondary" disabled={busy || recording} onClick={() => {
+              setReplyToOperationId(null);
+              setOperationId(crypto.randomUUID());
+              setProposal(null);
+              setUndo(false);
+              setError("");
+              setMessages([]);
+            }}>Start a new instruction</button>
+          </div>
+        )}
         <label className="sr-only" htmlFor="assistant-input">
           Instruction for ADA
         </label>

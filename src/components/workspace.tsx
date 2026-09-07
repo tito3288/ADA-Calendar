@@ -1117,6 +1117,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
         wide
       >
         <AssistantPanel
+          key={`${state.workspaceId}-${state.actor.id}`}
           state={state}
           onState={(next) => {
             update(next);

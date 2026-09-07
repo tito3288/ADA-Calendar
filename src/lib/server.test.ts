@@ -19,7 +19,7 @@ vi.mock("./server/service", async () => {
   return {
     currentActor: vi.fn(async () => DEMO_MEMBERS[0]), demoEnabled: vi.fn(() => true),
     store: { getState: vi.fn(async (id: string) => demo.getDemoState(demo.demoActor(id))), commit: vi.fn(demo.commitDemoProposal), request: vi.fn(demo.submitDemoRequest),
-      resolve: vi.fn(demo.resolveDemoRequest), undo: vi.fn(demo.undoDemoEvent), admin: vi.fn(demo.mutateDemoAdmin), beginAI: vi.fn(demo.beginDemoAIOperation), finishAI: vi.fn(demo.finishDemoAIOperation) },
+      resolve: vi.fn(demo.resolveDemoRequest), undo: vi.fn(demo.undoDemoEvent), admin: vi.fn(demo.mutateDemoAdmin), beginAI: vi.fn(demo.beginDemoAIOperation), finishAI: vi.fn(demo.finishDemoAIOperation), getAI: vi.fn(demo.getDemoAIOperation) },
   };
 });
 vi.mock("./server/assistant", async importOriginal => {
@@ -295,6 +295,99 @@ describe("privileged upload signing after trusted reservation", () => {
 });
 
 describe("assistant route admission and retries", () => {
+  const pendingInput = () => ({ text: "Add IT work for Higher Ground Tree: Private follow-up work, on 2030-09-09", operationId: crypto.randomUUID() });
+  it("keeps clarification private and commits a short answer exactly once", async () => {
+    const input = pendingInput();
+    const before = await getDemoState(DEMO_MEMBERS[0]);
+    const initialResponse = await request("assistant", input);
+    expect(initialResponse.status).toBe(200);
+    const pending = await initialResponse.json();
+    expect(pending.replyToOperationId).toBe(input.operationId);
+    expect(pending.interpretation.kind).toBe("clarification");
+    expect(pending.state.events).toEqual(before.events);
+    expect(pending.state.notifications).toEqual(before.notifications);
+    expect(JSON.stringify(await getDemoState(DEMO_MEMBERS[1]))).not.toContain("Private follow-up work");
+    const reply = { text: "Two hours", replyToOperationId: input.operationId, operationId: crypto.randomUUID() };
+    const first = await request("assistant", reply);
+    expect(first.status).toBe(200);
+    expect((await first.json()).replyToOperationId).toBeNull();
+    expect((await request("assistant", reply)).status).toBe(200);
+    expect(interpretInput).toHaveBeenCalledTimes(2);
+    const saved = await getDemoState(DEMO_MEMBERS[0]);
+    expect(saved.items.filter(item => item.title === "Private follow-up work")).toHaveLength(1);
+    expect(saved.events).toHaveLength(before.events.length + 1);
+    expect(saved.notifications).toHaveLength(before.notifications.length + 2);
+    expect((await request("assistant", { ...reply, operationId: crypto.randomUUID() })).status).toBe(400);
+    expect((await getDemoState(DEMO_MEMBERS[0])).events).toEqual(saved.events);
+  });
+  it("allows one competing reply without creating duplicate work or charging twice", async () => {
+    const input = pendingInput();
+    await request("assistant", input);
+    const results = await Promise.all([1, 2].map(() => request("assistant", { text: "Two hours", replyToOperationId: input.operationId, operationId: crypto.randomUUID() })));
+    expect(results.map(result => result.status).sort()).toEqual([200, 400]);
+    expect(interpretInput).toHaveBeenCalledTimes(2);
+    expect((await getDemoState(DEMO_MEMBERS[0])).events).toHaveLength(1);
+  });
+  it("replays an already completed answer after midnight but refuses a new stale reply", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-08T03:59:00Z"));
+    const input = pendingInput();
+    await request("assistant", input);
+    const reply = { text: "Two hours", replyToOperationId: input.operationId, operationId: crypto.randomUUID() };
+    expect((await request("assistant", reply)).status).toBe(200);
+    const saved = await getDemoState(DEMO_MEMBERS[0]);
+    vi.setSystemTime(new Date("2026-09-08T04:01:00Z"));
+    expect((await request("assistant", reply)).status).toBe(200);
+    expect((await request("assistant", { ...reply, text: "Three hours" })).status).toBe(400);
+    expect((await request("assistant", { ...reply, operationId: crypto.randomUUID() })).status).toBe(400);
+    expect(interpretInput).toHaveBeenCalledTimes(2);
+    expect((await getDemoState(DEMO_MEMBERS[0])).events).toEqual(saved.events);
+  });
+  it("rejects a new task before consuming the pending clarification or calling a provider", async () => {
+    const input = pendingInput();
+    await request("assistant", input);
+    const response = await request("assistant", { text: "Instead, add web work for Higher Ground Tree: Different work, 2 hours on 2030-09-10", replyToOperationId: input.operationId, operationId: crypto.randomUUID() });
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toContain("Start a new instruction");
+    expect(interpretInput).toHaveBeenCalledTimes(1);
+    expect((await request("assistant", { text: "Two hours", replyToOperationId: input.operationId, operationId: crypto.randomUUID() })).status).toBe(200);
+  });
+  it("dismisses without needing a provider key or paid budget reservation", async () => {
+    vi.mocked(demoEnabled).mockReturnValue(false);
+    vi.stubEnv("OPENAI_API_KEY", "");
+    const response = await request("assistant", { text: "Never mind", operationId: crypto.randomUUID() });
+    expect(response.status).toBe(200);
+    expect((await response.json()).replyToOperationId).toBeNull();
+    expect(store.beginAI).not.toHaveBeenCalled();
+    expect(interpretInput).not.toHaveBeenCalled();
+  });
+  it("denies foreign context, fabricated history, and a non-clarification parent", async () => {
+    const input = pendingInput();
+    await request("assistant", input);
+    vi.mocked(currentActor).mockResolvedValue(DEMO_MEMBERS[1]);
+    expect((await request("assistant", { text: "Two hours", replyToOperationId: input.operationId, operationId: crypto.randomUUID() })).status).toBe(400);
+    expect(interpretInput).toHaveBeenCalledTimes(1);
+    vi.mocked(currentActor).mockResolvedValue(DEMO_MEMBERS[0]);
+    expect((await request("assistant", { text: "Two hours", history: [{ role: "user", content: input.text }], operationId: crypto.randomUUID() })).status).toBe(400);
+    const doneId = crypto.randomUUID();
+    await request("assistant", { text: "Never mind", operationId: doneId });
+    expect((await request("assistant", { text: "Two hours", replyToOperationId: doneId, operationId: crypto.randomUUID() })).status).toBe(400);
+    expect((await getDemoState(DEMO_MEMBERS[0])).events).toHaveLength(0);
+  });
+  it("preserves several clarification turns and cancels without notifications", async () => {
+    const input = pendingInput();
+    await request("assistant", input);
+    const childId = crypto.randomUUID();
+    const again = await request("assistant", { text: "It is a web edit", operationId: childId, replyToOperationId: input.operationId });
+    expect(again.status).toBe(200);
+    expect((await again.json()).replyToOperationId).toBe(childId);
+    const parent = await store.getAI(DEMO_MEMBERS[0], childId);
+    expect(parent.result).toMatchObject({ continuation: { turns: [{ userText: input.text }, { userText: "It is a web edit" }] } });
+    const cancelled = await request("assistant", { text: "Never mind", operationId: crypto.randomUUID(), replyToOperationId: childId });
+    expect(cancelled.status).toBe(200);
+    expect((await cancelled.json()).replyToOperationId).toBeNull();
+    expect((await getDemoState(DEMO_MEMBERS[0])).notifications).toHaveLength(0);
+  });
   async function recording(operationId: string) {
     const form = new FormData();
     form.set("operationId", operationId);

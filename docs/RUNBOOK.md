@@ -4,6 +4,8 @@
 
 The application runs on Railway as a Next.js/Node container. Supabase provides Auth, Postgres, private Storage, pgmq and the bounded email worker. Resend delivers transactional email. There is no Gmail or Slack reader in version one.
 
+Bryan's September 7 decision is to deploy and test against **one real Supabase project named ADA Calendar and one Railway application**. Do not require or provision a separate hosted staging environment. Local automated tests remain isolated; hosted checks use the real configuration without treating the environment as disposable. This changes the environment plan, not the requirement to verify authentication, AI, uploads, scheduling, background processing and recovery before claiming them complete.
+
 The daily interruption reserve is for unexpected work in any category. Only Bryan can explicitly authorize its use; requesters' automatic clean-fit bookings cannot consume it.
 
 - Local development: Node 22.22+ or Node 24, npm, Docker/OrbStack for database verification. The Railway image uses Node 24.
@@ -11,7 +13,7 @@ The daily interruption reserve is for unexpected work in any category. Only Brya
 - Account setup requires the actual owner and recipient email addresses. Never use the sample addresses as live recipients.
 - `.env.example` documents app variables. Store real values in `.env.local` or provider secret settings; never commit them.
 - `ADA_DEMO_MODE=true` is development-only. Production requires live authentication/configuration and fails closed when they are missing.
-- Keep `EMAIL_MODE=capture` for local and preview environments. `test` only sends to `EMAIL_TEST_ALLOWLIST`; `live` must be set explicitly in the production worker after verification. Captured messages are not later replayed automatically.
+- Keep `EMAIL_MODE=capture` for local development and the initial real-environment setup. `test` only sends to `EMAIL_TEST_ALLOWLIST`; `live` must be set explicitly in the production worker after verification and Bryan's authorization to enable normal stakeholder delivery. Captured messages are not later replayed automatically.
 
 ## Local database and verification
 
@@ -36,6 +38,8 @@ For the additional local Edge-runtime gate, serve `notification-worker` with a l
 
 Review and apply all files in `supabase/migrations` in order to the selected empty Supabase project using the Supabase CLI migration workflow. Keep database migrations versioned with application releases. A migration rollback is a forward corrective migration or a tested restore, not a production database reset.
 
+The project-creation form currently has `tito3288/ADA-Calendar` selected for the optional Supabase GitHub integration. Before another push or migration deployment, inspect its actual automatic-deployment settings and migration history. Do not assume creation applied the migrations, and do not run two independent deployment paths for the same schema change. Keep an explicit migration review step even though there is no hosted staging project.
+
 Disable public signup. Configure Supabase Auth's Site URL and the exact allowed callback URL `<APP_URL>/api/auth/callback`. Configure custom SMTP (Resend SMTP is supported) before inviting real users; Supabase's built-in mailer is for development. Authentication emails and workload notifications are distinct flows.
 
 In Supabase Auth email templates, use a server-verifiable token-hash URL instead of the default implicit-token fragment. The invitation link must target `{{ .SiteURL }}/api/auth/callback?token_hash={{ .TokenHash }}&type=invite`; the magic-link template must target `{{ .SiteURL }}/api/auth/callback?token_hash={{ .TokenHash }}&type=email`. Set Site URL to the final app origin. Do not embed access/refresh tokens in app query strings or logs. Test both a fresh invitation and a subsequent login before onboarding the team.
@@ -52,9 +56,9 @@ Bootstrap needs `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `AP
 
 ## Railway deployment
 
-GitHub can be set up first: put the source and migrations in a **private** repository, with `.env.local`, recordings, sample persistence, and all credentials excluded. Railway can create a project from that repository using its [GitHub deployment workflow](https://docs.railway.com/quick-start). Supabase is a separate project for Auth, database and Storage; its optional [GitHub integration](https://supabase.com/docs/guides/deployment/branching/github-integration) concerns database branches/migrations and is not required just to store the app's source on GitHub.
+The source and migrations are already in the **public repository `tito3288/ADA-Calendar`**, as explicitly authorized by Bryan; `main` was pushed through `7d96b87`. Keep `.env.local`, recordings, sample persistence, workload data, and all credentials excluded. A public source repository does not make the application or its data public. Railway can create the single application from that repository using its [GitHub deployment workflow](https://docs.railway.com/quick-start). Supabase is the separate database service, not an additional staging environment; its optional [GitHub integration](https://supabase.com/docs/guides/deployment/branching/github-integration) concerns database branches/migrations. Review its enabled deployment options before subsequent pushes.
 
-Deploy the repository using its Dockerfile. Configure `APP_URL` and `NEXT_PUBLIC_APP_URL` to the final HTTPS Railway/custom domain, public Supabase URL/key, and server-only Supabase/OpenAI/Resend secrets. Set `ADA_DEMO_MODE=false`. The app listens on Railway's provided port. Never point a preview app at production tables or enable live stakeholder mail in previews.
+Deploy the repository using its Dockerfile. Configure `APP_URL` and `NEXT_PUBLIC_APP_URL` to the final HTTPS Railway/custom domain, public Supabase URL/key, and server-only Supabase/OpenAI/Resend secrets. Set `ADA_DEMO_MODE=false`. The app listens on Railway's provided port. Test the real integrations on this one application with captured or explicitly allowlisted mail before authorizing normal stakeholder delivery. No preview application is required; if one is introduced later, never connect it to the real database or live stakeholder mail.
 
 Keep Supabase Auth session-refresh responses private and uncached. Invite-only application membership is checked at the server and with database RLS. Railway availability is not needed for already queued notification jobs because the worker lives on Supabase; links remain useful when the app is back online.
 
@@ -98,9 +102,9 @@ Removing an attachment marks metadata as removed. It does not delete the blob, s
 
 Supabase database backups contain attachment metadata, not the Storage object bytes. A complete backup plan must export both database data and the private attachment objects. Keep encrypted copies separately; save each object's exact key, content type, byte count, and checksum. Never place backups in a public bucket or repository.
 
-To rehearse recovery, restore into a separate Supabase project with email capture mode and no Cron delivery job. Restore Auth identities/memberships, workspaces, events and queue state from a consistent database backup. Restore Storage objects at their original keys, then verify checksum and signed download of representative Markdown/PDF/image files. Verify role access, schedule version and overlap constraints. Reconcile sent/provider IDs before enabling delivery so restores do not replay old mail. Test the app against that restored project before any production cutover. Keep the original project available until verification is complete.
+To rehearse recovery, restore into an **isolated local Supabase instance** with email capture mode, no outbound SMTP/provider credentials, and no Cron delivery job. A second paid hosted project is not required. Keep the local destination separate from the real project's credentials and validate the destination before any restore or reset. Restore Auth identities/memberships, workspaces, events and queue state from a consistent database backup; document any managed-platform settings or roles that need separate recreation. Restore Storage objects at their original keys, then verify checksum and signed download of representative Markdown/PDF/image files. Verify role access, schedule version and overlap constraints. Protect the restored real data locally and keep it out of Git. Reconcile sent/provider IDs before any future live recovery so restores do not replay old mail. Test the app against the local restoration while leaving the real project unchanged.
 
-This production backup-and-restore rehearsal has not yet been performed. Local migration resets and fixture tests verify application behavior, not recovery of a hosted project or its attachment bytes. Complete and record the separate-project restore rehearsal before treating production recovery as verified.
+This production-data backup-and-restore rehearsal has not yet been performed. Local migration resets and fixture tests verify application behavior, not recovery of the real project's data or its attachment bytes. Complete and record the isolated restore rehearsal and any limitations before treating recovery as verified; a local rehearsal alone does not establish every hosted recovery procedure.
 
 ## Budget and operational checks
 

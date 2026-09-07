@@ -11,6 +11,7 @@ import { planCommands } from "@/lib/scheduler";
 import { transcriptionEstimatedUsd, transcriptionReservationUsd } from "@/lib/ai-cost";
 import { commandRequestSchema, commandSchema, clientSchema, settingsSchema, prioritySchema, idSchema, reviewFingerprintSchema } from "@/lib/schemas";
 import { interpretInput, transcribeAudio, inspectAudioRecording, assistantReservationUsd } from "@/lib/server/assistant";
+import { conversationText, isConversationCancellation, nextContinuation, readContinuation, type AssistantContinuation } from "@/lib/assistant-conversation";
 import { verifyEmailWebhook, deliveryStatusForEvent } from "@/lib/server/email";
 import { attachmentPath, validateUpload, authorizeAttachmentAccess } from "@/lib/server/uploads";
 import { PreviewChangedError, withReviewFingerprint } from "@/lib/server/preview";
@@ -172,17 +173,34 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
       return NextResponse.json({ state: await store.admin(actor, { type: "member", member: { id, ...input } }) });
     }
     if (route === "assistant") {
-      const input = z.object({ text: z.string().trim().min(1).max(12_000), operationId: idSchema }).strict().parse(await json(req));
+      const input = z.object({ text: z.string().trim().min(1).max(12_000), operationId: idSchema, replyToOperationId: idSchema.optional() }).strict().parse(await json(req));
+      const now = new Date();
+      const parent = input.replyToOperationId ? await store.getAI(actor, input.replyToOperationId) : null;
+      if (parent && (parent.kind !== "assistant" || parent.status !== "completed")) throw new Error("That instruction is not ready for a reply.");
+      // Dismissing this conversation is a local UI action, not a calendar command
+      // or a paid model call. Keep it available even without credentials/budget.
+      if (isConversationCancellation(input.text)) return NextResponse.json({ interpretation: { kind: "answer", message: "Pending instruction dismissed. No calendar work was changed or email sent.", commands: [] }, replyToOperationId: null, state }, { headers: { "Cache-Control": "private, no-store" } });
       if (!demoEnabled() && !process.env.OPENAI_API_KEY) return failure(new Error("The AI assistant is not connected. Use the manual form."), 503);
-      const operation = await store.beginAI(actor, { id: input.operationId, kind: "assistant", inputHash: createHash("sha256").update(input.text).digest("hex"), reserveUsd: demoEnabled() ? 0 : assistantReservationUsd(input.text, state) });
+      let continuation: AssistantContinuation | undefined;
+      if (parent) {
+        try { continuation = readContinuation(parent.result, now, state.settings.timeZone); }
+        catch (error) {
+          // A prior reply may already have committed before midnight or a lost
+          // response. beginAI still verifies the exact input hash and parent ID.
+          await store.getAI(actor, input.operationId).catch(() => { throw error; });
+          continuation = readContinuation(parent.result, now, state.settings.timeZone, true);
+        }
+      }
+      conversationText(input.text, continuation);
+      const operation = await store.beginAI(actor, { id: input.operationId, kind: "assistant", ...(input.replyToOperationId ? { parentId: input.replyToOperationId } : {}), inputHash: createHash("sha256").update(JSON.stringify({ text: input.text, replyToOperationId: input.replyToOperationId ?? null })).digest("hex"), reserveUsd: demoEnabled() ? 0 : assistantReservationUsd(input.text, state, continuation) });
       if (operation.status === "processing") return failure(new Error("This instruction is still processing. Retry with the same operation ID."), 409);
       if (operation.status === "failed") return failure(new Error("The prior attempt did not complete. No new AI call was made. Start a new instruction if you want to try again."), 409);
       let interpretation: Interpretation;
       if (operation.status === "completed") interpretation = (operation.result as { interpretation: Interpretation }).interpretation;
       else {
         try {
-          interpretation = await interpretInput(input.text, state, actor, { demo: demoEnabled() });
-          await store.finishAI(actor, input.operationId, { interpretation }, demoEnabled() ? undefined : interpretation.usage?.costUsd);
+          interpretation = await interpretInput(input.text, state, actor, { demo: demoEnabled(), now, continuation });
+          await store.finishAI(actor, input.operationId, { interpretation, continuation: nextContinuation(input.text, interpretation, now, continuation) }, demoEnabled() ? undefined : interpretation.usage?.costUsd);
         } catch (error) {
           await store.finishAI(actor, input.operationId, null, undefined, "The AI request did not complete. Its budget reservation was retained.");
           throw error;
@@ -203,7 +221,7 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
           state = await store.admin(actor, { type: "draft", draft });
         }
       }
-      return NextResponse.json({ interpretation, proposal: proposal ? withReviewFingerprint(proposal) : undefined, state });
+      return NextResponse.json({ interpretation, replyToOperationId: interpretation.kind === "clarification" ? input.operationId : null, proposal: proposal ? withReviewFingerprint(proposal) : undefined, state }, { headers: { "Cache-Control": "private, no-store" } });
     }
     if (route === "transcribe") {
       const body = await boundedBody(req, 25 * 1024 * 1024 + 64_000);

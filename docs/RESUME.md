@@ -1,5 +1,21 @@
 # ADA Calendar — current handoff
 
+## September 7, 2026 — single real environment and clarification fix
+
+Bryan explicitly chose **one real Supabase project named ADA Calendar and one Railway application**, without separate hosted staging. Keep this choice; do not ask him to recreate projects just for a staging label. Local automated tests remain isolated and never send real mail.
+
+- Existing `main` through `7d96b87` was pushed to the public repository `https://github.com/tito3288/ADA-Calendar` with Bryan's authorization. GitHub Actions run `34132208703` passed both verification jobs. This does not verify the later clarification fix until it is pushed and checked.
+- The missing conversational follow-up behavior is now implemented: the browser references an actor-private, server-written pending instruction; a short reply such as “Two hours” retains the original client/task/date. Only clarification results carry context forward. New instructions/dismissal do not replay old commands; typed dismissal needs no AI credentials or budget. Explicit override permissions are never inherited from older turns. Corrected dates survive multiple clarification questions. Context is bounded and new replies expire at the next local day; exact completed-operation retries remain idempotent afterward.
+- Added `202609070001_assistant_followups.sql`: one child per pending clarification, checked under the workspace lock, with same-operation retries and author/workspace isolation. The migration applied **in place** to the existing local ADA database without a reset. Extended real local database smoke and SQL lint passed; ADA containers were stopped with volumes preserved, and unrelated SimplAssist services remained untouched.
+- Latest unit/server verification: **131 tests in nine files**, lint and generated-route TypeScript checks passed. The repeatable intent script now covers six scenarios, including the two-turn estimate response; it passes in demo mode and has not been run against a live model. Browser and production-container evidence is recorded in `docs/VERIFICATION.md`.
+- The host production build hit a local Turbopack port-binding `EPERM`; use the tested Node 24 Docker build as the production artifact, not a claim that the host `npm run check` build succeeded.
+- The final frozen application source passed the Node **24.20.0** Docker production build and both network-isolated container smoke modes. Current local image digest is `sha256:38e29426c676b3594bf7094cdc2db585b782269dd9d00ce9da802b53928c1562`; no provider calls or hosted deployment occurred.
+- No hosted project, provider key, migration deployment, actual AI call, invitation, stakeholder email, or Railway deployment was performed in this correction turn. Bryan was last on Supabase's project-creation form with the optional GitHub repo selected. Obtain the created project's dashboard URL and inspect its integration/migration state before pushing this new migration or applying it through another path.
+
+**Next:** this correction is saved locally and awaits the next reviewed push. Obtain Bryan's created Supabase dashboard URL, inspect the selected GitHub integration/migration state, then push the correction and guide the single real project's schema/auth setup, Railway GitHub connection and secure environment variables, OpenAI, Resend, and actual integration testing. The optional Supabase GitHub integration may already apply migrations; inspect before applying duplicates. Capture or explicitly allowlist setup mail, then enable normal notifications deliberately. Do not claim real-model performance or hosted delivery is already verified.
+
+---
+
 ## September 7, 2026 — resumed and locally verified
 
 Bryan returned and asked to continue. The September 5 pause is over. All existing source was preserved; the working tree was clean at restart (`21dad63`).

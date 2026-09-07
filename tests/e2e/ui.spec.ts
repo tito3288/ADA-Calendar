@@ -266,6 +266,95 @@ test("typed commands save clean work while future-tense update language remains 
   await expect(page.getByRole("button", { name: "Send update email" }).first()).toBeVisible();
 });
 
+test("a short clarification reply keeps the original task and does not replay it on the next instruction", async ({ page }) => {
+  await asActor(page.request, "bryan");
+  await page.goto("/");
+  const before = await state(page.request);
+  const date = futureDate(before, 105);
+  const title = "E2E followup missing effort";
+  await page.getByRole("button", { name: "Ask ADA", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  const input = dialog.getByLabel("Instruction for ADA");
+  const send = dialog.getByRole("button", { name: "Send instruction" });
+  const continuation = dialog.getByText("Your reply will continue the pending instruction above.", { exact: true });
+  await input.fill(`Add IT work for Higher Ground Tree: ${title}, on ${date}`);
+  await send.click();
+  await expect(continuation).toBeVisible();
+  await expect(input).toHaveValue("");
+  const waiting = await state(page.request);
+  expect(waiting.version).toBe(before.version);
+  expect(waiting.items).toEqual(before.items);
+  expect(waiting.events).toHaveLength(before.events.length);
+  expect(waiting.notifications).toHaveLength(before.notifications.length);
+
+  await input.fill("Two hours");
+  await send.click();
+  await expect(continuation).toHaveCount(0);
+  await expect(input).toHaveValue("");
+  const saved = await state(page.request);
+  const matches = saved.items.filter(item => item.title === title);
+  expect(matches).toHaveLength(1);
+  const work = matches[0];
+  expect(work).toMatchObject({ clientId: "higher-ground", category: "it", estimatedMinutes: 120, remainingMinutes: 120, windowStart: date, windowEnd: date });
+  expect(saved.version).toBe(before.version + 1);
+  expect(saved.events).toHaveLength(before.events.length + 1);
+  const createdEvent = saved.events.find(event => event.itemIds.includes(work.id))!;
+  expect(saved.notifications.filter(notification => notification.eventId === createdEvent.id).map(notification => notification.recipient).sort()).toEqual(["kyle@example.test", "william@example.test"]);
+  expect(saved.notifications.every(notification => notification.status === "captured")).toBe(true);
+
+  const nextTitle = "E2E fresh instruction after clarification";
+  const nextDate = futureDate(saved, 112);
+  await input.fill(`Add web work for Higher Ground Tree: ${nextTitle}, 1 hour on ${nextDate}`);
+  await send.click();
+  await expect(input).toHaveValue("");
+  await expect(continuation).toHaveCount(0);
+  const after = await state(page.request);
+  expect(after.items.filter(item => item.title === title)).toHaveLength(1);
+  expect(after.items.filter(item => item.title === nextTitle)).toHaveLength(1);
+  expect(after.items.find(item => item.title === nextTitle)).toMatchObject({ category: "web", estimatedMinutes: 60, windowStart: nextDate });
+  expect(after.events).toHaveLength(saved.events.length + 1);
+});
+
+test("starting a new instruction discards pending context and Never mind leaves work unchanged", async ({ page }) => {
+  await asActor(page.request, "bryan");
+  await page.goto("/");
+  const before = await state(page.request);
+  const date = futureDate(before, 119);
+  const title = "E2E abandoned pending instruction";
+  await page.getByRole("button", { name: "Ask ADA", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  const input = dialog.getByLabel("Instruction for ADA");
+  const send = dialog.getByRole("button", { name: "Send instruction" });
+  const continuation = dialog.getByText("Your reply will continue the pending instruction above.", { exact: true });
+  await input.fill(`Add IT work for Higher Ground Tree: ${title}, on ${date}`);
+  await send.click();
+  await expect(continuation).toBeVisible();
+  await dialog.getByRole("button", { name: "Start a new instruction", exact: true }).click();
+  await expect(continuation).toHaveCount(0);
+  await expect(dialog.locator(".chat-message")).toHaveCount(0);
+  await expect(input).toHaveValue("");
+
+  // A bare estimate after clearing the pending instruction must not revive it.
+  await input.fill("Two hours");
+  await send.click();
+  await expect(continuation).toBeVisible();
+  await expect(input).toHaveValue("");
+  const unanswered = await state(page.request);
+  expect(unanswered.items).toEqual(before.items);
+  expect(unanswered.events).toHaveLength(before.events.length);
+  expect(unanswered.notifications).toHaveLength(before.notifications.length);
+  await input.fill("Never mind");
+  await send.click();
+  await expect(continuation).toHaveCount(0);
+  await expect(input).toHaveValue("");
+  await expect(dialog.getByText("Pending instruction dismissed. No calendar work was changed or email sent.", { exact: true })).toBeVisible();
+  const cancelled = await state(page.request);
+  expect(cancelled.version).toBe(before.version);
+  expect(cancelled.items).toEqual(before.items);
+  expect(cancelled.events).toHaveLength(before.events.length);
+  expect(cancelled.notifications).toHaveLength(before.notifications.length);
+});
+
 test("Markdown briefs preserve the original while rendering without executable HTML", async ({ page }) => {
   await asActor(page.request, "bryan");
   const before = await state(page.request);

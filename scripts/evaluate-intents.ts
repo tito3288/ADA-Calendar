@@ -4,6 +4,7 @@
  */
 import { createDemoState, DEMO_MEMBERS } from "../src/lib/fixtures";
 import { interpretInput } from "../src/lib/server/assistant";
+import { nextContinuation } from "../src/lib/assistant-conversation";
 
 const live = process.argv.includes("--live");
 if (live && !process.env.OPENAI_API_KEY) throw new Error("Live evaluation requires OPENAI_API_KEY. No calls were made.");
@@ -23,6 +24,16 @@ async function main() {
     if (!pass) failed += 1;
     console.log(JSON.stringify({ pass, text: test.text, expected: test.kind, actual: result.kind, commands: result.commands.length, usage: result.usage ?? null }));
   }
+  const now = new Date("2026-09-07T12:00:00Z");
+  const state = createDemoState(now.toISOString());
+  const text = "Add IT work for Higher Ground Tree: fix the form, on 2026-09-08";
+  const first = await interpretInput(text, state, DEMO_MEMBERS[0], { demo: !live, now });
+  const continuation = nextContinuation(text, first, now);
+  const reply = continuation ? await interpretInput("Two hours", state, DEMO_MEMBERS[0], { demo: !live, now, continuation }) : null;
+  const work = reply?.commands[0];
+  const pass = first.kind === "clarification" && first.commands.length === 0 && reply?.commands.length === 1 && work?.type === "create" && work.item.clientId === "higher-ground" && work.item.estimatedMinutes === 120 && work.item.windowStart === "2026-09-08";
+  if (!pass) failed += 1;
+  console.log(JSON.stringify({ pass, scenario: "short clarification reply retains original client and date", initialKind: first.kind, replyKind: reply?.kind, usage: [first.usage ?? null, reply?.usage ?? null] }));
   if (failed) process.exitCode = 1;
 }
 void main();

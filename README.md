@@ -40,6 +40,8 @@ The container check starts and removes only its own temporary network-isolated t
 
 This project deploys to **Railway**, with a Node 24 multi-stage Docker image and Next.js standalone output. Railway supplies `PORT`; the application listens on `0.0.0.0`. `/api/health` is the healthcheck. The database, private uploads, authentication and durable notification worker remain on Supabase.
 
-Set `ADA_DEMO_MODE=false` in production. Configure Supabase and a canonical HTTPS `APP_URL`. Keep `EMAIL_MODE=capture` until sender verification, recipient configuration and workflow tests are complete. Do not point preview builds at production credentials.
+Use **one real Supabase project named ADA Calendar and one Railway application**, per Bryan's September 7 decision. A separate hosted staging environment is not required. The public GitHub repository is `tito3288/ADA-Calendar`; application access and stored workload data remain private. Review Supabase's selected GitHub integration and automatic-deployment settings before further pushes.
+
+Set `ADA_DEMO_MODE=false` in production. Configure Supabase and a canonical HTTPS `APP_URL`. Verify the real integrations in this environment, keeping `EMAIL_MODE=capture` or explicitly allowlisted `test` delivery until sender verification, recipient configuration and workflow tests are complete and Bryan authorizes normal live notifications. Local automated tests remain isolated. API keys, backups and workload data never belong in Git. A backup/Storage restore rehearsal remains unverified and can use an isolated local destination rather than a second hosted project.
 
 See [the blueprint](docs/BLUEPRINT.md), [setup and recovery](docs/RUNBOOK.md), and [implementation verification](docs/VERIFICATION.md).
