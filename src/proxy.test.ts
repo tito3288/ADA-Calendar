@@ -37,7 +37,7 @@ describe("Supabase session proxy", () => {
     const request = new NextRequest("https://ada.example.test/", { headers: { origin: "https://ada.example.test" } });
     const response = await proxy(request);
     expect(request.cookies.get("sb-fixture-auth-token")?.value).toBe("refreshed-fixture");
-    expect(response.cookies.get("sb-fixture-auth-token")).toMatchObject({ value: "refreshed-fixture", path: "/", sameSite: "lax", secure: true });
+    expect(response.cookies.get("sb-fixture-auth-token")).toMatchObject({ value: "refreshed-fixture", path: "/", sameSite: "lax", secure: true, httpOnly: true });
     expect(response.cookies.get("sb-fixture-auth-token")?.domain).toBeUndefined();
     expect(response.headers.get("cache-control")).toBe("private, no-store");
   });

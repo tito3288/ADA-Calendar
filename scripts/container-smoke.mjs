@@ -75,9 +75,11 @@ async function probe(mode) {
   assert.doesNotMatch(html, /Your plate, at a glance\.|SAMPLE PREVIEW/);
   if (mode === "unconfigured") {
     assert.match(html, /Connect your private workspace/);
-    assert.doesNotMatch(html, /Email me a sign-in link/);
+    assert.doesNotMatch(html, /id="login-password"/);
   } else {
-    assert.match(html, /Email me a sign-in link/);
+    assert.match(html, /id="login-password"/);
+    assert.match(html, /Forgot password/);
+    assert.doesNotMatch(html, /Email me a sign-in link/);
     assert.doesNotMatch(html, /Connect your private workspace/);
     assert.match(page.headers.get("cache-control") || "", /private/);
   }

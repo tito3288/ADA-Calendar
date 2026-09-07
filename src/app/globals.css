@@ -2073,6 +2073,7 @@ small {
   min-height: 100vh;
 }
 .signin-card {
+  width: 100%;
   max-width: 410px;
   margin: auto;
   padding: 45px 30px;
@@ -2102,6 +2103,68 @@ small {
   align-items: center;
   justify-content: center;
   gap: 6px;
+}
+.auth-form {
+  margin-bottom: 20px;
+}
+.auth-password-field {
+  margin-bottom: 15px;
+}
+.auth-password-field > label {
+  margin-bottom: 6px;
+}
+.auth-password-control {
+  position: relative;
+}
+.auth-password-control input {
+  padding-right: 65px;
+}
+.auth-password-toggle {
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  bottom: 2px;
+  min-width: 55px;
+  border-radius: 5px;
+  color: #c0e4d0;
+  font-size: 12px;
+}
+.auth-password-toggle:hover {
+  background: #26342b;
+}
+.auth-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 15px 0;
+  font-size: 12px;
+}
+.auth-links-end {
+  justify-content: flex-end;
+}
+.auth-links a {
+  color: #c0e4d0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.auth-help {
+  font-size: 12px;
+  line-height: 1.65;
+  margin-top: 12px;
+}
+.auth-message {
+  padding: 12px;
+  border: 1px solid #3a5144;
+  border-radius: 7px;
+  color: #c0e4d0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.auth-message.error {
+  color: #ffb4ac;
+  border-color: #69433e;
 }
 .signin-art {
   position: relative;

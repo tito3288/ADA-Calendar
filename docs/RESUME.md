@@ -1,6 +1,35 @@
 # ADA Calendar — current handoff
 
-## September 7, 2026 — first hosted database deployment checkpoint
+## September 7, 2026 — password sign-in implementation
+
+This is the current checkpoint; older sections below are historical. Bryan asked for **password sign-in before continuing Resend setup**, then explicitly authorized committing and pushing this implementation to `main`. Verify this checkpoint's GitHub and Railway deployment before treating the password change as live. Preserve the pre-existing generated `next-env.d.ts` development reference change outside this commit.
+
+### Implemented and verified locally
+
+- Normal email/password sign-in, persistent HttpOnly cookies, invite-only access, first-password setup and forgotten-password recovery. No magic-link request on normal login. Public signup stays off. Password setup requires a real verified active member, not a demo actor or query parameter.
+- Account provisioning saves membership before sending the invitation; existing accounts can explicitly receive setup/recovery email. Development auth email is guarded independently of workload capture. Bootstrap remains dry-run/no-send unless explicitly requested.
+- Supabase invite/recovery token-hash templates are checked in. They must be pasted into hosted Auth settings manually after SMTP is configured. No schema migration or new package is needed for this change.
+- Full lint, TypeScript and 194 unit/server tests pass. The password/browser suite contains 26 passing scenarios. Real isolated local Supabase/Mailpit checks passed first invitation, actual browser password setup and login, persistent authenticated access, recovery, old-password rejection, replay rejection and revoked-member denial. Desktop/mobile password setup axe scans had no violations. Production Node 24 Docker build and network-isolated container checks passed; see `VERIFICATION.md`.
+- No real passwords, hosted test users or external emails were created. Synthetic local accounts/workspace/mail were cleaned up. ADA local Supabase was stopped with volumes preserved; isolated test servers stopped too. Port 3000 and unrelated SimplAssist services were left alone. Test screenshots remain under ignored `.data/password-auth-smoke-k2j3pR/` and `test-results/`.
+
+### Actual hosted setup already completed
+
+- Public GitHub repository `tito3288/ADA-Calendar`, branch `main`; most recent pushed checkpoint `46dab6c`. Supabase production deployment succeeded, and Bryan's screenshot showed all seven migrations through `202609070001_assistant_followups`.
+- One real Supabase project: `xlenubijjhhippntcvim`, API `https://xlenubijjhhippntcvim.supabase.co`. GitHub integration: root `.`, production `main` enabled, automatic branching disabled.
+- Railway application is online at `https://ada-calendar-production.up.railway.app`. Its last observed login page still offers the old email link until this change is pushed/deployed.
+- Railway has app URLs, Supabase public URL/publishable key, service credential and demo/capture settings entered. Values were masked; never repeat secrets. OpenAI/Resend/worker credentials remain to be set up. A successful deployment or displayed login form is not proof of live sign-in or all integrations.
+- Hosted Supabase Auth Site URL is the Railway origin; allowed redirect is the exact `/api/auth/callback` URL. Public signup, anonymous sign-in and manual linking are off; Confirm email and Email provider are on.
+
+### Next with Bryan
+
+1. Finish the authorized commit/push if still pending, then verify Railway builds and shows email/password fields. Keep the same Supabase/Railway projects; do not provision hosted staging.
+2. Continue Resend domain/SMTP setup. Get the sending domain name, not secrets in chat. Set hosted Auth's minimum password length to 12 and install the Invite user and Reset password templates from `supabase/templates/`; existing Site URL/callback need no new path.
+3. Collect actual account emails and bootstrap/bind the owner. Send the one-time setup invitation only when authorized. Bryan chooses his own password in the app, never in chat. Then verify live password login/recovery and invite Kyle/William when ready.
+4. Complete OpenAI configuration/evaluations, worker secrets/Cron/webhook and captured/allowlisted workload delivery checks, then normal notifications with explicit authorization. Client list/aliases and full real integrations/backup+Storage restoration remain outstanding. Local tests do not prove these hosted outcomes.
+
+---
+
+## Historical September 7, 2026 — first hosted database deployment checkpoint
 
 This section supersedes the historical setup instructions below. Continue with **one real Supabase project named ADA Calendar and one Railway application**, not separate hosted staging.
 

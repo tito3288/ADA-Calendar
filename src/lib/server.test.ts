@@ -9,8 +9,10 @@ import { planCommands } from "./scheduler";
 import { addDays, localDate, nextWorkDate } from "./time";
 import type { EmailDraft, Interpretation, ScheduleProposal } from "./types";
 
-const storageMocks = vi.hoisted(() => ({ sign: vi.fn(), admin: vi.fn(), caller: vi.fn() }));
-vi.mock("./server/supabase", () => ({ getSupabaseAdminClient: storageMocks.admin, getSupabaseServerClient: storageMocks.caller }));
+const storageMocks = vi.hoisted(() => ({ sign: vi.fn(), admin: vi.fn(), caller: vi.fn(), clearCookies: vi.fn() }));
+const invitationMocks = vi.hoisted(() => ({ ensureAccount: vi.fn(), deliver: vi.fn() }));
+vi.mock("./server/supabase", () => ({ getSupabaseAdminClient: storageMocks.admin, getSupabaseServerClient: storageMocks.caller, clearSupabaseSessionCookies: storageMocks.clearCookies }));
+vi.mock("./account-invitations", () => ({ ensureAuthAccount: invitationMocks.ensureAccount, deliverAccountSetupEmail: invitationMocks.deliver }));
 
 vi.mock("server-only", () => ({}));
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => ({ value: "bryan" }), set: vi.fn() }) }));
@@ -40,14 +42,167 @@ beforeEach(async () => {
   vi.mocked(currentActor).mockResolvedValue(DEMO_MEMBERS[0]);
   vi.mocked(demoEnabled).mockReturnValue(true);
   vi.mocked(interpretInput).mockClear();
+  invitationMocks.ensureAccount.mockReset();
+  invitationMocks.deliver.mockReset();
   storageMocks.sign.mockResolvedValue({ data: { signedUrl: "https://storage.example.test/private-upload" }, error: null });
   storageMocks.admin.mockReturnValue({ storage: { from: () => ({ createSignedUploadUrl: storageMocks.sign }) } });
 });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.clearAllMocks(); });
 
-function request(route: string, body: unknown, origin = "http://localhost:3000") {
-  return POST(new NextRequest(`http://localhost:3000/api/${route}`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify(body) }), { params: Promise.resolve({ path: route.split("/") }) });
+function request(route: string, body: unknown, origin: string | null = "http://localhost:3000") {
+  return POST(new NextRequest(`http://localhost:3000/api/${route}`, { method: "POST", headers: { ...(origin ? { origin } : {}), "content-type": "application/json" }, body: JSON.stringify(body) }), { params: Promise.resolve({ path: route.split("/") }) });
 }
+
+describe("password authentication route boundaries", () => {
+  it("never reflects password snippets from malformed JSON", async () => {
+    const result = await POST(new NextRequest("http://localhost:3000/api/auth/login", {
+      method: "POST", headers: { origin: "http://localhost:3000", "content-type": "application/json" },
+      body: '{"password":"private-fixture-password" invalid}',
+    }), { params: Promise.resolve({ path: ["auth", "login"] }) });
+    expect(result.status).toBe(400);
+    expect(await result.json()).toEqual({ error: "Enter a valid authentication request." });
+    expect(storageMocks.caller).not.toHaveBeenCalled();
+  });
+  const email = "route-fixture@example.test";
+  const password = " Route Fixture Password! 42 ";
+  const cases = [
+    { route: "auth/login", body: { email, password } },
+    { route: "auth/forgot-password", body: { email } },
+    { route: "auth/password", body: { password, confirmPassword: password } },
+  ];
+  for (const { route, body } of cases) {
+    for (const origin of [null, "https://cross-origin.example.test"]) {
+      it(`rejects ${origin ? "cross-origin" : "missing-origin"} ${route} before calling authentication or calendar services`, async () => {
+        const result = await request(route, body, origin);
+        expect(result.status).toBe(400);
+        expect(await result.json()).toEqual({ error: "Request origin could not be verified." });
+        expect(storageMocks.caller).not.toHaveBeenCalled();
+        expect(storageMocks.admin).not.toHaveBeenCalled();
+        expect(currentActor).not.toHaveBeenCalled();
+        expect(store.admin).not.toHaveBeenCalled();
+        expect(store.commit).not.toHaveBeenCalled();
+      });
+    }
+  }
+
+  it("does not allow the demo owner cookie to authorize a real password update", async () => {
+    const getUser = vi.fn().mockResolvedValue({ data: { user: null }, error: null });
+    const updateUser = vi.fn();
+    storageMocks.caller.mockResolvedValueOnce({ auth: { getUser, updateUser } });
+    const result = await request("auth/password", { password, confirmPassword: password });
+    expect(result.status).toBe(401);
+    expect(await result.json()).toEqual({ error: "Open a valid invitation or password-reset link first." });
+    expect(getUser).toHaveBeenCalledOnce();
+    expect(currentActor).not.toHaveBeenCalled();
+    expect(updateUser).not.toHaveBeenCalled();
+    expect(store.admin).not.toHaveBeenCalled();
+  });
+
+  it("wires password login to Supabase without changing password bytes or disclosing sessions", async () => {
+    const signInWithPassword = vi.fn().mockResolvedValue({ data: { user: { id: "route-user" }, session: { access_token: "fixture-token-never-returned" } }, error: null });
+    const membership = { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: { user_id: "route-user" }, error: null }) };
+    const from = vi.fn(() => membership);
+    storageMocks.caller.mockResolvedValueOnce({ auth: { signInWithPassword }, from });
+    const result = await request("auth/login", { email, password });
+    expect(result.status).toBe(200);
+    expect(await result.json()).toEqual({ ok: true });
+    expect(result.headers.get("cache-control")).toBe("private, no-store");
+    expect(signInWithPassword).toHaveBeenCalledExactlyOnceWith({ email, password });
+    expect(from).toHaveBeenCalledWith("workspace_members");
+    expect(membership.eq).toHaveBeenCalledWith("active", true);
+    expect(currentActor).not.toHaveBeenCalled();
+  });
+
+  it("wires recovery to the generic acknowledgment and the fixed local callback", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "http://127.0.0.1:54321");
+    const membership = { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: { user_id: "route-user" }, error: null }) };
+    storageMocks.admin.mockReturnValueOnce({ from: () => membership });
+    const resetPasswordForEmail = vi.fn().mockResolvedValue({ data: {}, error: null });
+    storageMocks.caller.mockResolvedValueOnce({ auth: { resetPasswordForEmail } });
+    const result = await request("auth/forgot-password", { email });
+    expect(result.status).toBe(200);
+    expect(await result.json()).toEqual({ message: expect.stringMatching(/^If this email belongs to an invited account,/) });
+    expect(resetPasswordForEmail).toHaveBeenCalledExactlyOnceWith(email, { redirectTo: "http://localhost:3000/api/auth/callback" });
+    expect(currentActor).not.toHaveBeenCalled();
+  });
+
+  it("wires an authenticated password update only to that user and clears the completed setup session", async () => {
+    const auth = {
+      getUser: vi.fn().mockResolvedValue({ data: { user: { id: "route-user" } }, error: null }),
+      updateUser: vi.fn().mockResolvedValue({ data: { user: { id: "route-user" } }, error: null }),
+      signOut: vi.fn().mockResolvedValue({ error: null }),
+    };
+    const membership = { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: { user_id: "route-user" }, error: null }) };
+    storageMocks.caller.mockResolvedValueOnce({ auth, from: () => membership });
+    const result = await request("auth/password", { password, confirmPassword: password });
+    expect(result.status).toBe(200);
+    expect(await result.json()).toEqual({ ok: true });
+    expect(auth.updateUser).toHaveBeenCalledExactlyOnceWith({ password });
+    expect(membership.eq).toHaveBeenCalledWith("user_id", "route-user");
+    expect(auth.signOut).toHaveBeenCalledExactlyOnceWith({ scope: "global" });
+    expect(storageMocks.clearCookies).toHaveBeenCalledOnce();
+    expect(currentActor).not.toHaveBeenCalled();
+    expect(store.admin).not.toHaveBeenCalled();
+  });
+});
+
+describe("invitation route delivery ordering", () => {
+  const input = { name: "Invited Fixture", email: "invited-fixture@example.test", role: "requester" as const };
+  const user = { id: "invited-fixture-user", email: input.email };
+
+  it.each([DEMO_MEMBERS[1], DEMO_MEMBERS[2], DEMO_MEMBERS[3]])("denies invitation delivery for the $role role ($name)", async (actor) => {
+    vi.mocked(currentActor).mockResolvedValue(actor);
+    vi.mocked(demoEnabled).mockReturnValue(false);
+    const result = await request("members/invite", input);
+    expect(result.status).toBe(actor.role === "viewer" ? 403 : 400);
+    expect(invitationMocks.ensureAccount).not.toHaveBeenCalled();
+    expect(invitationMocks.deliver).not.toHaveBeenCalled();
+    expect(store.admin).not.toHaveBeenCalled();
+  });
+
+  it("creates or finds the account and binds membership before any invitation delivery", async () => {
+    vi.mocked(demoEnabled).mockReturnValue(false);
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "http://127.0.0.1:54321");
+    const order: string[] = [];
+    const snapshot = await getDemoState(DEMO_MEMBERS[0]);
+    invitationMocks.ensureAccount.mockImplementationOnce(async () => { order.push("account"); return user; });
+    vi.mocked(store.admin).mockImplementationOnce(async (actor, operation) => {
+      expect(actor).toEqual(DEMO_MEMBERS[0]);
+      expect(operation).toEqual({ type: "member", member: { id: user.id, ...input } });
+      order.push("membership");
+      return snapshot;
+    });
+    invitationMocks.deliver.mockImplementationOnce(async () => { order.push("email"); });
+    const result = await request("members/invite", input);
+    expect(result.status).toBe(200);
+    expect(order).toEqual(["account", "membership", "email"]);
+    expect(invitationMocks.ensureAccount).toHaveBeenCalledWith(expect.anything(), input.email, input.name);
+    expect(invitationMocks.deliver).toHaveBeenCalledExactlyOnceWith(expect.anything(), user, "http://localhost:3000", "http://127.0.0.1:54321");
+  });
+
+  it("does not send an invitation when binding membership fails", async () => {
+    vi.mocked(demoEnabled).mockReturnValue(false);
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "http://127.0.0.1:54321");
+    invitationMocks.ensureAccount.mockResolvedValueOnce(user);
+    vi.mocked(store.admin).mockRejectedValueOnce(new Error("Fixture membership transaction failed."));
+    const result = await request("members/invite", input);
+    expect(result.status).toBe(400);
+    expect(invitationMocks.ensureAccount).toHaveBeenCalledOnce();
+    expect(store.admin).toHaveBeenCalledOnce();
+    expect(invitationMocks.deliver).not.toHaveBeenCalled();
+  });
+
+  it("keeps demo invitations in the isolated fixture without accessing Auth or sending email", async () => {
+    const result = await request("members/invite", input);
+    expect(result.status).toBe(200);
+    const snapshot = (await result.json()).state;
+    expect(snapshot.members).toContainEqual(expect.objectContaining(input));
+    expect(invitationMocks.ensureAccount).not.toHaveBeenCalled();
+    expect(invitationMocks.deliver).not.toHaveBeenCalled();
+    expect(storageMocks.admin).not.toHaveBeenCalled();
+    expect(storageMocks.caller).not.toHaveBeenCalled();
+  });
+});
 
 describe("serialized demo operations", () => {
   it("claims one provider operation across concurrent retries and keeps its result private", async () => {

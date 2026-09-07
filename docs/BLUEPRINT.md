@@ -12,6 +12,7 @@ Bryan wears four hats: Web (edits/builds), IT, Landings, and Software. Kyle, Wil
 
 - Timezone America/Indiana/Indianapolis; weekdays 9–17, lunch 12–12:30, interruption reserve 16–17; ordinary project capacity 390 minutes/day. Settings editable by Bryan.
 - Owner Bryan; Kyle/William requesters; invited teammates may be viewers/requesters. All see the shared agency workload; transcripts/drafts are private.
+- September 7 sign-in decision: use email and password with persistent, server-managed sessions. No public signup. Initial invitations let each person create their own password; forgotten passwords use recovery email. Normal sign-in does not request an email link. Passwords are handled by Supabase Auth, never saved in workload records or returned in API responses.
 - Requesters supply effort. Clean-fit submissions commit automatically, notifying Bryan. A request that changes existing commitments waits for Bryan's approval. Requesters never edit/delete scheduled work, even their own. Requested priority is advisory; effective priority defaults Normal.
 - Explicit owner instructions authorize ordinary replanning. Urgent alone never overrides protected sessions or firm deadlines. Clarify/preview exceptions unless the owner explicitly authorizes them.
 - Project spans and actual work sessions are different. Thin faded month ribbons communicate open work; thicker day segments show hours and protection. Week/day show exact sessions. Spans reserve zero capacity. Month opens first on desktop; mobile uses agenda.

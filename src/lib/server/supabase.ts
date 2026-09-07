@@ -13,15 +13,32 @@ function publicConfiguration() {
 export async function getSupabaseServerClient() {
   const { url, key } = publicConfiguration();
   const cookieStore = await cookies();
+  const secure = (process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || "").startsWith("https://");
   return createServerClient(url, key, {
     cookies: {
       getAll: () => cookieStore.getAll(),
       setAll: (values) => {
-        try { values.forEach(({ name, value, options }) => cookieStore.set(name, value, options)); }
+        try { values.forEach(({ name, value, options }) => cookieStore.set(name, value, {
+          ...options, domain: undefined, path: "/", sameSite: "lax", secure, httpOnly: true,
+        })); }
         catch { /* Server Components cannot set cookies; src/proxy.ts refreshes them first. */ }
       },
     },
   });
+}
+
+/** Auth is server-only in this app; clean up just this project's session cookies. */
+export async function clearSupabaseSessionCookies() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!url) return;
+  const prefix = `sb-${new URL(url).hostname.split(".")[0]}-auth-token`;
+  const cookieStore = await cookies();
+  for (const { name } of cookieStore.getAll()) {
+    if (name === prefix || name.startsWith(`${prefix}.`) || name === `${prefix}-code-verifier`) {
+      cookieStore.set(name, "", { path: "/", maxAge: 0, httpOnly: true, sameSite: "lax",
+        secure: (process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || "").startsWith("https://") });
+    }
+  }
 }
 
 export function getSupabaseAdminClient() {

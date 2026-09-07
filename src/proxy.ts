@@ -18,7 +18,7 @@ export async function proxy(request: NextRequest) {
       setAll(values) {
         for (const { name, value } of values) request.cookies.set(name, value);
         response = NextResponse.next({ request });
-        for (const { name, value, options } of values) response.cookies.set(name, value, { ...options, domain: undefined, path: "/", sameSite: "lax", secure: appUrl.protocol === "https:" });
+        for (const { name, value, options } of values) response.cookies.set(name, value, { ...options, domain: undefined, path: "/", sameSite: "lax", secure: appUrl.protocol === "https:", httpOnly: true });
       },
     },
   });

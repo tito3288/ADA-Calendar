@@ -6,7 +6,10 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { currentActor, demoEnabled, store } from "@/lib/server/service";
 import { demoDirectory, getDemoUploadReservation } from "@/lib/server/demo-store";
-import { getSupabaseAdminClient, getSupabaseServerClient } from "@/lib/server/supabase";
+import { clearSupabaseSessionCookies, getSupabaseAdminClient, getSupabaseServerClient } from "@/lib/server/supabase";
+import { ensureAuthAccount, deliverAccountSetupEmail } from "@/lib/account-invitations";
+import { assertAuthEmailAllowed } from "@/lib/auth-email-policy";
+import { handleAuthCallback, loginWithPassword, requestPasswordRecovery, updateOwnPassword, authResponse } from "@/lib/server/password-auth";
 import { planCommands } from "@/lib/scheduler";
 import { transcriptionEstimatedUsd, transcriptionReservationUsd } from "@/lib/ai-cost";
 import { commandRequestSchema, commandSchema, clientSchema, settingsSchema, prioritySchema, idSchema, reviewFingerprintSchema } from "@/lib/schemas";
@@ -20,7 +23,7 @@ import type { Attachment, EmailDraft, Interpretation, WorkCommand } from "@/lib/
 export const runtime = "nodejs";
 export const maxDuration = 120;
 type RouteContext = { params: Promise<{ path: string[] }> };
-const failure = (error: unknown, status = 400) => NextResponse.json({ error: error instanceof z.ZodError ? error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join(" ") : error instanceof Error ? error.message : "The operation could not be completed." }, { status });
+const failure = (error: unknown, status = 400) => NextResponse.json({ error: error instanceof z.ZodError ? error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join(" ") : error instanceof Error ? error.message : "The operation could not be completed." }, { status, headers: { "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer" } });
 function checkOrigin(req: NextRequest) {
   const origin = req.headers.get("origin");
   const expected = new URL(process.env.APP_URL || req.url).origin;
@@ -29,6 +32,12 @@ function checkOrigin(req: NextRequest) {
 async function json(req: NextRequest) {
   const text = new TextDecoder().decode(await boundedBody(req, 200_000));
   return JSON.parse(text);
+}
+async function authJson(req: NextRequest): Promise<unknown> {
+  try { return await json(req); }
+  catch { // JSON parser messages can contain snippets of a submitted password.
+    throw new Error("Enter a valid authentication request.");
+  }
 }
 async function boundedBody(req: NextRequest, limit: number): Promise<Uint8Array> {
   if (Number(req.headers.get("content-length") || 0) > limit) throw new Error("This request is too large.");
@@ -53,15 +62,7 @@ function safeName(name: string) { return name.replace(/[\r\n"\\/]/g, "_"); }
 export async function GET(req: NextRequest, ctx: RouteContext) {
   try {
     const segments = (await ctx.params).path;
-    if (segments.join("/") === "auth/callback") {
-      const code = req.nextUrl.searchParams.get("code");
-      const tokenHash = req.nextUrl.searchParams.get("token_hash");
-      const db = await getSupabaseServerClient();
-      if (code) { const result = await db.auth.exchangeCodeForSession(code); if (result.error) throw result.error; }
-      else if (tokenHash) { const type = z.enum(["email", "invite"]).parse(req.nextUrl.searchParams.get("type") || "email"); const result = await db.auth.verifyOtp({ token_hash: tokenHash, type }); if (result.error) throw result.error; }
-      else throw new Error("Sign-in link is missing its verification code.");
-      return NextResponse.redirect(new URL("/", process.env.APP_URL || req.url));
-    }
+    if (segments.join("/") === "auth/callback") return handleAuthCallback(req);
     const actor = await currentActor();
     const state = await store.getState(actor.id);
     if (segments[0] === "state") return NextResponse.json(state, { headers: { "Cache-Control": "no-store" } });
@@ -107,16 +108,19 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
       (await cookies()).set("ada-demo-actor", input.id, { httpOnly: true, sameSite: "strict", path: "/" });
       return NextResponse.json({ ok: true });
     }
-    if (route === "auth/login") {
-      const input = z.object({ email: z.email() }).parse(await json(req));
-      const db = await getSupabaseServerClient();
-      const { error } = await db.auth.signInWithOtp({ email: input.email, options: { shouldCreateUser: false, emailRedirectTo: `${process.env.APP_URL}/api/auth/callback` } });
-      if (error) throw new Error("Unable to send a sign-in link. Check that your account has been invited.");
-      return NextResponse.json({ message: "Check your email for a private sign-in link." });
+    if (route === "auth/login") return loginWithPassword(await authJson(req));
+    if (route === "auth/forgot-password") return requestPasswordRecovery(await authJson(req));
+    if (route === "auth/password") return updateOwnPassword(await authJson(req));
+    // Even a revoked member must be able to clear their own login session.
+    if (route === "auth/logout") {
+      if (!demoEnabled()) {
+        try { await (await getSupabaseServerClient()).auth.signOut({ scope: "local" }); }
+        finally { await clearSupabaseSessionCookies(); }
+      }
+      return authResponse({ ok: true });
     }
     const actor = await currentActor();
     let state = await store.getState(actor.id);
-    if (route === "auth/logout") { if (!demoEnabled()) await (await getSupabaseServerClient()).auth.signOut(); return NextResponse.json({ ok: true }); }
     if (actor.role === "viewer") return failure(new Error("Viewers have read-only access."), 403);
     if (route === "commands") {
       const input = commandRequestSchema.parse(await json(req));
@@ -163,14 +167,17 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
     }
     if (route === "members/invite") {
       if (actor.role !== "owner") throw new Error("Only Bryan can invite teammates.");
-      const input = z.object({ name: z.string().min(1).max(100), email: z.email(), role: z.enum(["requester", "viewer"]) }).strict().parse(await json(req));
-      let id: string = randomUUID();
-      if (!demoEnabled()) {
-        const { data, error } = await getSupabaseAdminClient().auth.admin.inviteUserByEmail(input.email, { redirectTo: `${process.env.APP_URL}/api/auth/callback`, data: { name: input.name } });
-        if (error) throw error;
-        id = data.user.id;
-      }
-      return NextResponse.json({ state: await store.admin(actor, { type: "member", member: { id, ...input } }) });
+      const input = z.object({ name: z.string().trim().min(1).max(100), email: z.string().trim().toLowerCase().pipe(z.email()), role: z.enum(["requester", "viewer"]) }).strict().parse(await json(req));
+      if (demoEnabled()) return NextResponse.json({ state: await store.admin(actor, { type: "member", member: { id: randomUUID(), ...input } }) });
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+      assertAuthEmailAllowed(input.email, supabaseUrl);
+      const admin = getSupabaseAdminClient();
+      const user = await ensureAuthAccount(admin, input.email, input.name);
+      // Bind permissions before an invitation can be accepted. If delivery fails,
+      // retrying reuses this account and membership instead of sending duplicates.
+      state = await store.admin(actor, { type: "member", member: { id: user.id, ...input } });
+      await deliverAccountSetupEmail(admin, user, process.env.APP_URL || "", supabaseUrl);
+      return NextResponse.json({ state });
     }
     if (route === "assistant") {
       const input = z.object({ text: z.string().trim().min(1).max(12_000), operationId: idSchema, replyToOperationId: idSchema.optional() }).strict().parse(await json(req));
