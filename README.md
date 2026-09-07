@@ -27,6 +27,15 @@ npm run test:e2e
 
 Browser tests use isolated demo persistence and captured mail. Database tests require the local Supabase/Postgres runtime described in the runbook.
 
+To verify the production image locally without contacting external services:
+
+```sh
+docker build -t ada-calendar:v1-local .
+npm run test:container
+```
+
+The container check starts and removes only its own temporary network-isolated test containers. It does not deploy anything.
+
 ## Railway
 
 This project deploys to **Railway**, with a Node 24 multi-stage Docker image and Next.js standalone output. Railway supplies `PORT`; the application listens on `0.0.0.0`. `/api/health` is the healthcheck. The database, private uploads, authentication and durable notification worker remain on Supabase.

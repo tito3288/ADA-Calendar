@@ -1,4 +1,20 @@
-# ADA Calendar — saved stopping point
+# ADA Calendar — current handoff
+
+## September 7, 2026 — resumed and locally verified
+
+Bryan returned and asked to continue. The September 5 pause is over. All existing source was preserved; the working tree was clean at restart (`21dad63`).
+
+- Re-ran all **17 browser/API tests** successfully after the last implementation changes; desktop/mobile axe checks passed with zero violations, and screenshots were inspected.
+- Re-ran lint, generated route types, TypeScript and **108 unit/server tests** successfully.
+- Rebuilt `ada-calendar:v1-local` with Node 24 and a successful optimized Next.js build. Added `npm run test:container`, which proves non-root startup, health/static assets, runtime-only configuration, no production demo bypass, and unauthenticated state denial inside disposable **network-isolated** containers. Both containers were removed; unrelated SimplAssist services were untouched.
+- Updated `docs/VERIFICATION.md`, README and runbook. No real emails, model calls, invitations, deployments, GitHub repository creation or remote push occurred.
+- Bryan has a domain, but has **not yet created the Railway or Supabase projects**. He prefers connecting Railway to GitHub. A private GitHub repository can be created/pushed first; Supabase is a separate hosted project and does not need to exist first.
+
+**Next action:** obtain Bryan's approval and selected account/organization for creating/pushing a private `ada-calendar` GitHub repository (or use an existing repository he supplies). Then connect Railway, create the isolated Supabase environment, securely configure credentials/domain/accounts, and complete the hosted release gates listed in `docs/VERIFICATION.md`. Do not claim that live AI, actual mail, hosted authentication or backup/Storage restoration have already been verified. Do not repeat the full implementation from scratch.
+
+---
+
+## Historical September 5 pause checkpoint
 
 Saved September 5, 2026 at Bryan's request to pause for the day. **Do not restart implementation or switch hosting platforms.** Resume from the existing code after Bryan returns and asks to continue. Nothing is scheduled to run automatically.
 

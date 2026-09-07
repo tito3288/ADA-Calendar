@@ -52,9 +52,20 @@ Bootstrap needs `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `AP
 
 ## Railway deployment
 
+GitHub can be set up first: put the source and migrations in a **private** repository, with `.env.local`, recordings, sample persistence, and all credentials excluded. Railway can create a project from that repository using its [GitHub deployment workflow](https://docs.railway.com/quick-start). Supabase is a separate project for Auth, database and Storage; its optional [GitHub integration](https://supabase.com/docs/guides/deployment/branching/github-integration) concerns database branches/migrations and is not required just to store the app's source on GitHub.
+
 Deploy the repository using its Dockerfile. Configure `APP_URL` and `NEXT_PUBLIC_APP_URL` to the final HTTPS Railway/custom domain, public Supabase URL/key, and server-only Supabase/OpenAI/Resend secrets. Set `ADA_DEMO_MODE=false`. The app listens on Railway's provided port. Never point a preview app at production tables or enable live stakeholder mail in previews.
 
 Keep Supabase Auth session-refresh responses private and uncached. Invite-only application membership is checked at the server and with database RLS. Railway availability is not needed for already queued notification jobs because the worker lives on Supabase; links remain useful when the app is back online.
+
+Before deploying a changed container, run:
+
+```sh
+docker build -t ada-calendar:v1-local .
+npm run test:container
+```
+
+This checks the local image with no mounted files, no exposed host ports and no external networking. It creates only two uniquely named temporary ADA containers, then removes them. It checks Node 24/non-root execution, an arbitrary supplied port, health/static assets, ffprobe, no bundled local environment/demo persistence, production demo denial, and runtime configuration without rebuilding. It does not connect to real Supabase or verify Railway itself.
 
 ## Notification worker and Cron
 
