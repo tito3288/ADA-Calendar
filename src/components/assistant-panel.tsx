@@ -1,31 +1,107 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { ArrowUp, Mic, Square, Sparkles, Undo2 } from "lucide-react";
 import type { AppState, Interpretation, ScheduleProposal } from "@/lib/types";
 import { api, ApiError } from "./ui";
 import { ProposalCard } from "./work-form";
+import {
+  dateSelectionSchema,
+  type AssistantDateSelection,
+} from "@/lib/assistant-date-selection";
+import { dateLabel } from "./ui";
+
+export type AssistantDraft = {
+  text: string;
+  busy: boolean;
+  messages: { author: string; text: string }[];
+  proposal: ScheduleProposal | null;
+  undo: boolean;
+  operationId: string;
+  replyToOperationId: string | null;
+};
+export function emptyAssistantDraft(): AssistantDraft {
+  return {
+    text: "",
+    busy: false,
+    messages: [],
+    proposal: null,
+    undo: false,
+    operationId: crypto.randomUUID(),
+    replyToOperationId: null,
+  };
+}
+export function selectedDatesLabel(selection: AssistantDateSelection) {
+  const options = { month: "short", day: "numeric", year: "numeric" } as const;
+  return selection.start === selection.end
+    ? dateLabel(selection.start, options)
+    : `${dateLabel(selection.start, options)} – ${dateLabel(selection.end, options)}`;
+}
 
 export function AssistantPanel({
   state,
   onState,
+  draft,
+  onDraft,
+  dateSelection,
+  onDateSelection,
 }: {
   state: AppState;
   onState: (s: AppState) => void;
+  draft: AssistantDraft;
+  onDraft: Dispatch<SetStateAction<AssistantDraft>>;
+  dateSelection: AssistantDateSelection | null;
+  onDateSelection: (selection: AssistantDateSelection | null) => void;
 }) {
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
+  const {
+    text,
+    busy,
+    messages,
+    proposal,
+    undo,
+    operationId,
+    replyToOperationId,
+  } = draft;
+  function setField<K extends keyof AssistantDraft>(
+    key: K,
+    value: SetStateAction<AssistantDraft[K]>,
+  ) {
+    onDraft((current) => ({
+      ...current,
+      [key]:
+        typeof value === "function"
+          ? (value as (previous: AssistantDraft[K]) => AssistantDraft[K])(
+              current[key],
+            )
+          : value,
+    }));
+  }
+  const setText = (value: SetStateAction<string>) => setField("text", value);
+  const setBusy = (value: boolean) => setField("busy", value);
+  const setMessages = (value: SetStateAction<AssistantDraft["messages"]>) =>
+    setField("messages", value);
+  const setProposal = (value: ScheduleProposal | null) =>
+    setField("proposal", value);
+  const setUndo = (value: boolean) => setField("undo", value);
+  const setOperationId = (value: string) => setField("operationId", value);
+  const setReplyToOperationId = (value: string | null) =>
+    setField("replyToOperationId", value);
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState("");
-  const [messages, setMessages] = useState<{ author: string; text: string }[]>(
-    [],
+  const [editingDates, setEditingDates] = useState(false);
+  const [dateStart, setDateStart] = useState(dateSelection?.start ?? "");
+  const [dateEnd, setDateEnd] = useState(dateSelection?.end ?? "");
+  const [dateKind, setDateKind] = useState<AssistantDateSelection["kind"]>(
+    dateSelection?.kind ?? "work_window",
   );
-  const [proposal, setProposal] = useState<ScheduleProposal | null>(null);
-  const [undo, setUndo] = useState(false);
   const recorder = useRef<MediaRecorder | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const alive = useRef(true);
-  const [operationId, setOperationId] = useState(() => crypto.randomUUID());
-  const [replyToOperationId, setReplyToOperationId] = useState<string | null>(null);
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -46,16 +122,44 @@ export function AssistantPanel({
         state: AppState;
         proposal?: ScheduleProposal;
         replyToOperationId: string | null;
-      }>("assistant", { text, operationId, ...(replyToOperationId ? { replyToOperationId } : {}) });
+        dateSelection?: AssistantDateSelection | null;
+      }>("assistant", {
+        text,
+        operationId,
+        dateSelection,
+        ...(replyToOperationId ? { replyToOperationId } : {}),
+      });
       setMessages((m) => [
         ...m,
-        { author: state.actor.name, text },
+        {
+          author: state.actor.name,
+          text: dateSelection
+            ? `${text}\nSelected ${dateSelection.kind === "project_span" ? "project timeline" : "work dates"}: ${selectedDatesLabel(dateSelection)}`
+            : text,
+        },
         { author: "ADA", text: r.interpretation.message },
       ]);
       onState(r.state);
-      setProposal(r.proposal?.status !== "ready" ? (r.proposal ?? null) : null);
+      setProposal(
+        r.proposal &&
+          (r.proposal.status !== "ready" || r.proposal.requiresApproval)
+          ? r.proposal
+          : null,
+      );
       setUndo(r.interpretation.kind === "undo");
       setReplyToOperationId(r.replyToOperationId);
+      const pending =
+        r.replyToOperationId ||
+        (r.proposal &&
+          (r.proposal.status !== "ready" || r.proposal.requiresApproval));
+      onDateSelection(
+        r.dateSelection === undefined
+          ? pending
+            ? dateSelection
+            : null
+          : r.dateSelection,
+      );
+      setEditingDates(false);
       setText("");
       setOperationId(crypto.randomUUID());
     } catch (e) {
@@ -177,6 +281,7 @@ export function AssistantPanel({
                 ).state,
               );
               setProposal(null);
+              onDateSelection(null);
             } catch (e) {
               setError((e as Error).message);
               if (e instanceof ApiError && e.proposal) setProposal(e.proposal);
@@ -205,17 +310,142 @@ export function AssistantPanel({
         </button>
       )}
       <form onSubmit={submit} className="assistant-composer">
-        {replyToOperationId && (
+        <div className="assistant-date-context">
+          <div>
+            <strong>
+              {dateSelection
+                ? `Selected ${dateSelection.kind === "project_span" ? "project timeline" : "work dates"}`
+                : "Dates from your instruction"}
+            </strong>
+            <p aria-live="polite">
+              {dateSelection
+                ? selectedDatesLabel(dateSelection)
+                : "You can still type or speak dates naturally."}
+            </p>
+            {dateSelection && (
+              <small>
+                {dateSelection.kind === "project_span"
+                  ? "Timeline only. This range does not book work sessions."
+                  : "Schedule within this range, not on every day. Nothing is reserved until you send."}
+              </small>
+            )}
+          </div>
+          <div className="date-context-actions">
+            <button
+              type="button"
+              className="text-button"
+              disabled={busy || recording || Boolean(proposal)}
+              onClick={() => {
+                setDateStart(dateSelection?.start ?? "");
+                setDateEnd(dateSelection?.end ?? "");
+                setDateKind(dateSelection?.kind ?? "work_window");
+                setEditingDates(!editingDates);
+              }}
+            >
+              {dateSelection ? "Change dates" : "Choose dates"}
+            </button>
+            {dateSelection && (
+              <button
+                type="button"
+                className="text-button"
+                disabled={busy || recording || Boolean(proposal)}
+                onClick={() => {
+                  onDateSelection(null);
+                  setOperationId(crypto.randomUUID());
+                  setEditingDates(false);
+                }}
+              >
+                Clear dates
+              </button>
+            )}
+          </div>
+        </div>
+        {editingDates && (
+          <div className="assistant-date-editor">
+            <label>
+              Start date
+              <input
+                type="date"
+                value={dateStart}
+                onChange={(e) => setDateStart(e.target.value)}
+                disabled={busy}
+              />
+            </label>
+            <label>
+              End date
+              <input
+                type="date"
+                value={dateEnd}
+                min={dateStart || undefined}
+                onChange={(e) => setDateEnd(e.target.value)}
+                disabled={busy}
+              />
+            </label>
+            {state.actor.role === "owner" && (
+              <label>
+                Use dates as
+                <select
+                  value={dateKind}
+                  onChange={(e) =>
+                    setDateKind(
+                      e.target.value as AssistantDateSelection["kind"],
+                    )
+                  }
+                >
+                  <option value="work_window">Work window</option>
+                  <option value="project_span">Project timeline only</option>
+                </select>
+              </label>
+            )}
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy}
+              onClick={() => {
+                const selection = dateSelectionSchema.safeParse({
+                  start: dateStart,
+                  end: dateEnd || dateStart,
+                  kind: state.actor.role === "owner" ? dateKind : "work_window",
+                });
+                if (!selection.success) {
+                  setError(selection.error.issues[0].message);
+                  return;
+                }
+                onDateSelection(selection.data);
+                setOperationId(crypto.randomUUID());
+                setEditingDates(false);
+                setError("");
+              }}
+            >
+              Use these dates
+            </button>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => setEditingDates(false)}
+            >
+              Cancel date changes
+            </button>
+          </div>
+        )}
+        {(replyToOperationId || messages.length > 0 || proposal) && (
           <div className="demo-note">
-            <p>Your reply will continue the pending instruction above.</p>
-            <button type="button" className="secondary" disabled={busy || recording} onClick={() => {
-              setReplyToOperationId(null);
-              setOperationId(crypto.randomUUID());
-              setProposal(null);
-              setUndo(false);
-              setError("");
-              setMessages([]);
-            }}>Start a new instruction</button>
+            {replyToOperationId && (
+              <p>Your reply will continue the pending instruction above.</p>
+            )}
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy || recording}
+              onClick={() => {
+                onDraft(emptyAssistantDraft());
+                onDateSelection(null);
+                setEditingDates(false);
+                setError("");
+              }}
+            >
+              Start a new instruction
+            </button>
           </div>
         )}
         <label className="sr-only" htmlFor="assistant-input">

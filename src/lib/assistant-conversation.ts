@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Interpretation } from "./types";
+import { dateSelectionSchema, type AssistantDateSelection } from "./assistant-date-selection";
 
 export const MAX_ASSISTANT_INPUT = 12_000;
 export const MAX_CLARIFICATION_TURNS = 8;
@@ -10,6 +11,7 @@ const turnSchema = z.object({
 const continuationSchema = z.object({
   turns: z.array(turnSchema).min(1).max(MAX_CLARIFICATION_TURNS),
   startedAt: z.iso.datetime(),
+  dateSelection: dateSelectionSchema.nullable().optional(),
 }).strict();
 export type AssistantContinuation = z.infer<typeof continuationSchema>;
 
@@ -71,10 +73,11 @@ export function conversationText(text: string, continuation?: AssistantContinuat
   return combined;
 }
 
-export function nextContinuation(text: string, interpretation: Interpretation, now: Date, prior?: AssistantContinuation): AssistantContinuation | null {
+export function nextContinuation(text: string, interpretation: Interpretation, now: Date, prior?: AssistantContinuation, dateSelection?: AssistantDateSelection | null): AssistantContinuation | null {
   if (interpretation.kind !== "clarification") return null;
   return {
     turns: [...(prior?.turns ?? []), { userText: text, question: interpretation.message.slice(0, 4_000) }],
     startedAt: prior?.startedAt ?? now.toISOString(),
+    ...(dateSelection !== undefined ? { dateSelection } : prior?.dateSelection !== undefined ? { dateSelection: prior.dateSelection } : {}),
   };
 }

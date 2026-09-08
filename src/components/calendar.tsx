@@ -3,6 +3,7 @@ import { useMemo, type CSSProperties } from "react";
 import dynamic from "next/dynamic";
 import { LockKeyhole, ArrowUpRight } from "lucide-react";
 import type { AppState, WorkCommand, WorkItem } from "@/lib/types";
+import type { AssistantDateSelection } from "@/lib/assistant-date-selection";
 import { addDays, dayOfWeek, localDate, minutesBetween } from "@/lib/time";
 import { dayCapacity } from "@/lib/scheduler";
 import { formatHours } from "@/lib/work";
@@ -19,8 +20,18 @@ type Props = {
   items: WorkItem[];
   onSelect: (id: string) => void;
   onDate: (date: string) => void;
+  selectingDates?: boolean;
+  dateSelection?: AssistantDateSelection | null;
 };
-export function MonthCalendar({ state, date, items, onSelect, onDate }: Props) {
+export function MonthCalendar({
+  state,
+  date,
+  items,
+  onSelect,
+  onDate,
+  selectingDates = false,
+  dateSelection,
+}: Props) {
   const first = date.slice(0, 7) + "-01";
   const start = addDays(first, -(dayOfWeek(first) % 7));
   const today = localDate(new Date().toISOString(), state.settings.timeZone);
@@ -32,7 +43,10 @@ export function MonthCalendar({ state, date, items, onSelect, onDate }: Props) {
     [start],
   );
   return (
-    <div className="month-calendar" aria-label="Month workload calendar">
+    <div
+      className={`month-calendar ${selectingDates ? "is-selecting-dates" : ""}`}
+      aria-label="Month workload calendar"
+    >
       <div className="weekday-head">
         {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
           <span key={d}>{d}</span>
@@ -85,23 +99,41 @@ export function MonthCalendar({ state, date, items, onSelect, onDate }: Props) {
                 const isWorkday = state.settings.weekdays.includes(
                   dayOfWeek(d),
                 );
+                const inSelection = Boolean(
+                  dateSelection &&
+                  d >= dateSelection.start &&
+                  d <= dateSelection.end,
+                );
                 return (
                   <button
                     key={d}
-                    className={`day-cell ${d.slice(0, 7) !== first.slice(0, 7) ? "outside-month" : ""} ${d === today ? "is-today" : ""} ${!isWorkday ? "weekend" : ""}`}
+                    className={`day-cell ${d.slice(0, 7) !== first.slice(0, 7) ? "outside-month" : ""} ${d === today ? "is-today" : ""} ${!isWorkday ? "weekend" : ""} ${inSelection ? "date-selected" : ""} ${dateSelection && (d === dateSelection.start || d === dateSelection.end) ? "date-endpoint" : ""}`}
                     onClick={() => onDate(d)}
+                    aria-pressed={selectingDates ? inSelection : undefined}
                     aria-label={`${dateLabel(d, { weekday: "long", month: "long", day: "numeric" })}, ${isWorkday ? `${formatHours(capacity.availableMinutes)} available, ${formatHours(capacity.plannedMinutes)} planned` : "Non-working day"}`}
-                    title={isWorkday ? `${formatHours(capacity.availableMinutes)} left to book · ${formatHours(capacity.plannedMinutes)} planned · ${formatHours(capacity.capacityMinutes)} daily capacity. Lunch, interruption reserve and unavailable time are excluded.` : "Non-working day"}
+                    title={
+                      isWorkday
+                        ? `${formatHours(capacity.availableMinutes)} left to book · ${formatHours(capacity.plannedMinutes)} planned · ${formatHours(capacity.capacityMinutes)} daily capacity. Lunch, interruption reserve and unavailable time are excluded.`
+                        : "Non-working day"
+                    }
                   >
                     <span className="day-header">
                       <span className="day-number">{Number(d.slice(-2))}</span>
                       {isWorkday && (
-                        <span className={`day-capacity ${capacity.availableMinutes === 0 ? "capacity-full" : capacity.availableMinutes <= 60 ? "capacity-low" : ""}`}>
+                        <span
+                          className={`day-capacity ${capacity.availableMinutes === 0 ? "capacity-full" : capacity.availableMinutes <= 60 ? "capacity-low" : ""}`}
+                        >
                           <span className="day-capacity-remaining">
-                            <strong>{formatHours(capacity.availableMinutes)}</strong>
+                            <strong>
+                              {formatHours(capacity.availableMinutes)}
+                            </strong>
                             <span>left</span>
                           </span>
-                          <small className={`day-capacity-planned ${capacity.plannedMinutes === 0 ? "is-empty" : ""}`}>{formatHours(capacity.plannedMinutes)} planned</small>
+                          <small
+                            className={`day-capacity-planned ${capacity.plannedMinutes === 0 ? "is-empty" : ""}`}
+                          >
+                            {formatHours(capacity.plannedMinutes)} planned
+                          </small>
                         </span>
                       )}
                     </span>
@@ -131,6 +163,7 @@ export function MonthCalendar({ state, date, items, onSelect, onDate }: Props) {
                 return (
                   <button
                     key={item.id}
+                    disabled={selectingDates}
                     title={`${client?.name} · ${item.title}`}
                     onClick={() => onSelect(item.id)}
                     className={`project-ribbon category-${item.category} ${item.status === "waiting" ? "ribbon-waiting" : ""}`}

@@ -1,0 +1,133 @@
+import { expect, test, type Page } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
+import { createDemoState } from "../../src/lib/fixtures";
+import type { AppState } from "../../src/lib/types";
+import { asActor, origin, state } from "./helpers";
+
+// Browser-only fictional data. All assistant replies are intercepted, with no
+// provider calls, workload mutations, or emails. Real storage is checked below.
+async function prepare(page: Page, width = 1440, role: "bryan" | "kyle" | "viewer" = "bryan") {
+  await asActor(page.request, role);
+  const stored = await state(page.request);
+  expect(stored.mode).toBe("demo");
+  const fixture: AppState = { ...createDemoState("2026-09-08T13:00:00Z"), workspaceId: stored.workspaceId, actor: stored.actor,
+    clients: [{ id: "cedar", name: "Cedar Studio", aliases: [] }], items: [], sessions: [], blocks: [], events: [], requests: [], notifications: [], attachments: [], emailDrafts: [] };
+  await page.setViewportSize({ width, height: 1000 });
+  await page.clock.setFixedTime(new Date("2026-09-08T13:00:00Z"));
+  await page.route(`${origin}/api/state`, route => route.fulfill({ json: fixture }));
+  await page.goto("/");
+  if (width <= 760) await expect(page.getByRole("button", { name: "agenda", exact: true })).toHaveClass(/active/);
+  // Wait for hydration before dispatching the synthetic focus refresh.
+  await page.getByRole("button", { name: "agenda", exact: true }).click();
+  await expect(page.getByRole("button", { name: "agenda", exact: true })).toHaveClass(/active/);
+  await page.getByRole("button", { name: "month", exact: true }).click();
+  await expect(page.getByRole("button", { name: "month", exact: true })).toHaveClass(/active/);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByTitle("Cedar Studio", { exact: true })).toHaveCount(1);
+  return { fixture, stored };
+}
+const day = (page: Page, name: string) => page.getByLabel("Month workload calendar", { exact: true }).getByRole("button", { name: new RegExp(`^${name},`) });
+const dialog = (page: Page) => page.getByRole("dialog", { name: "Ask ADA", exact: true });
+
+for (const width of [1440, 390]) test(`selects a cross-month range and retains it through a follow-up at ${width}px`, async ({ page }, info) => {
+  const { fixture, stored } = await prepare(page, width);
+  const requests: Record<string, unknown>[] = [];
+  await page.route(`${origin}/api/assistant`, async route => {
+    const input = route.request().postDataJSON(); requests.push(input);
+    await route.fulfill({ json: { state: fixture,
+      interpretation: requests.length === 1 ? { kind: "clarification", message: "How many hours for the page edits?", commands: [] } : { kind: "answer", message: "Test complete; no work saved.", commands: [] },
+      replyToOperationId: requests.length === 1 ? input.operationId : null,
+      dateSelection: requests.length === 1 ? input.dateSelection : null } });
+  });
+  await page.getByRole("button", { name: "Select dates", exact: true }).click();
+  await day(page, "Tuesday, September 29").click();
+  await expect(day(page, "Tuesday, September 29")).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Next period", exact: true }).click();
+  await day(page, "Friday, October 2").click();
+  await expect(page.locator(".date-selection-toolbar strong")).toHaveText("Sep 29, 2026 – Oct 2, 2026");
+  await expect(day(page, "Thursday, October 1")).toHaveAttribute("aria-pressed", "true");
+  expect(requests).toHaveLength(0);
+  expect((await state(page.request)).items).toEqual(stored.items);
+  await page.screenshot({ path: info.outputPath(`selected-range-${width}.png`), fullPage: true });
+  const calendarAudit = await new AxeBuilder({ page }).include(".primary-column").analyze();
+  expect(calendarAudit.violations).toEqual([]);
+  await page.getByRole("button", { name: "Ask ADA about these dates", exact: true }).click();
+  await expect(dialog(page).locator(".assistant-date-context")).toContainText("Sep 29, 2026 – Oct 2, 2026");
+  await dialog(page).getByLabel("Instruction for ADA", { exact: true }).fill("Add web work for Cedar Studio: Page edits.");
+  await dialog(page).getByRole("button", { name: "Send instruction", exact: true }).click();
+  await expect(dialog(page).getByText("How many hours for the page edits?", { exact: true })).toBeVisible();
+  await dialog(page).getByLabel("Instruction for ADA", { exact: true }).fill("Two hours");
+  await dialog(page).getByRole("button", { name: "Close dialog", exact: true }).click();
+  await page.getByRole("button", { name: "Ask ADA", exact: true }).click();
+  await expect(dialog(page).getByLabel("Instruction for ADA", { exact: true })).toHaveValue("Two hours");
+  await expect(dialog(page).locator(".assistant-date-context")).toContainText("Sep 29, 2026 – Oct 2, 2026");
+  expect((await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations).toEqual([]);
+  await dialog(page).screenshot({ path: info.outputPath(`selected-conversation-${width}.png`) });
+  await dialog(page).getByRole("button", { name: "Send instruction", exact: true }).click();
+  await expect(dialog(page).getByText("Test complete; no work saved.", { exact: true })).toBeVisible();
+  expect(requests[0].dateSelection).toEqual({ start: "2026-09-29", end: "2026-10-02", kind: "work_window" });
+  expect(requests[1].dateSelection).toEqual(requests[0].dateSelection);
+  expect(requests[1].replyToOperationId).toBe(requests[0].operationId);
+  await expect(dialog(page).locator(".assistant-date-context")).toContainText("Dates from your instruction");
+  expect((await state(page.request)).notifications).toEqual(stored.notifications);
+});
+
+test("single-day keyboard selection, reverse ranges, reset, and ordinary day navigation", async ({ page }) => {
+  await prepare(page);
+  await page.getByRole("button", { name: "Select dates", exact: true }).click();
+  await day(page, "Friday, September 11").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".date-selection-toolbar strong")).toHaveText("Sep 11, 2026");
+  await day(page, "Wednesday, September 9").locator(".day-number").click();
+  await expect(page.locator(".date-selection-toolbar strong")).toHaveText("Sep 9, 2026 – Sep 11, 2026");
+  await day(page, "Monday, September 14").click();
+  await expect(page.locator(".date-selection-toolbar strong")).toHaveText("Sep 14, 2026");
+  await page.getByRole("button", { name: "Clear selection", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Ask ADA about these dates", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Cancel selection", exact: true }).click();
+  await day(page, "Wednesday, September 9").locator(".day-number").click();
+  await expect(page.getByRole("button", { name: "day", exact: true })).toHaveClass(/active/);
+});
+
+test("change and clear dates, preserve errors, and require a deliberate new instruction", async ({ page }) => {
+  await prepare(page);
+  await page.route(`${origin}/api/assistant`, route => route.fulfill({ status: 400, json: { error: "Offline test: retry later." } }));
+  await page.getByRole("button", { name: "Select dates", exact: true }).click();
+  await day(page, "Wednesday, September 9").click();
+  await page.getByRole("button", { name: "Ask ADA about these dates", exact: true }).click();
+  await dialog(page).getByRole("button", { name: "Change dates", exact: true }).click();
+  await dialog(page).getByLabel("End date", { exact: true }).fill("2026-09-11");
+  await dialog(page).getByRole("button", { name: "Use these dates", exact: true }).click();
+  await dialog(page).getByLabel("Instruction for ADA", { exact: true }).fill("Add web work for Cedar Studio: Page edits, two hours.");
+  await dialog(page).getByRole("button", { name: "Send instruction", exact: true }).click();
+  await expect(dialog(page).getByText("Offline test: retry later.", { exact: true })).toBeVisible();
+  await expect(dialog(page).locator(".assistant-date-context")).toContainText("Sep 9, 2026 – Sep 11, 2026");
+  await dialog(page).getByRole("button", { name: "Clear dates", exact: true }).click();
+  await expect(dialog(page).locator(".assistant-date-context")).toContainText("Dates from your instruction");
+  await dialog(page).getByRole("button", { name: "Close dialog", exact: true }).click();
+  await page.getByRole("button", { name: "Select dates", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Start a new instruction?", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Keep current instruction", exact: true }).click();
+  await expect(dialog(page).getByLabel("Instruction for ADA", { exact: true })).toHaveValue(/Cedar Studio/);
+  await dialog(page).getByRole("button", { name: "Close dialog", exact: true }).click();
+  await page.getByRole("button", { name: "Select dates", exact: true }).click();
+  await page.getByRole("button", { name: "Start a new instruction", exact: true }).click();
+  await day(page, "Thursday, September 10").click();
+  await page.getByLabel("Use selected dates as", { exact: true }).selectOption("project_span");
+  await page.getByRole("button", { name: "Ask ADA about these dates", exact: true }).click();
+  await expect(dialog(page).getByLabel("Instruction for ADA", { exact: true })).toHaveValue("");
+  await expect(dialog(page).locator(".assistant-date-context")).toContainText("Selected project timeline");
+});
+
+test("requesters get work windows, while viewers get no date-selection command", async ({ page }) => {
+  await prepare(page, 1440, "kyle");
+  await page.getByRole("button", { name: "Select dates", exact: true }).click();
+  await day(page, "Wednesday, September 9").click();
+  await expect(page.getByLabel("Use selected dates as", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Ask ADA about these dates", exact: true }).click();
+  await expect(dialog(page).locator(".assistant-date-context")).toContainText("Selected work dates");
+  await page.unroute(`${origin}/api/state`);
+  await prepare(page, 1440, "viewer");
+  await expect(page.getByRole("button", { name: "Select dates", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Ask ADA", exact: true })).toHaveCount(0);
+});

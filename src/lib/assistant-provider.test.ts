@@ -11,6 +11,17 @@ vi.mock("openai", async importOriginal => {
 afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
 
 describe("Responses adapter follow-up context (mocked provider, no paid calls)", () => {
+  it("passes selected dates as explicit data without adding them to source quotes or changing the model", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "offline-provider-test-placeholder");
+    const now = new Date("2026-09-08T13:00:00Z");
+    const state = { ...createDemoState(now.toISOString()), clients: [{ id: "cedar", name: "Cedar Studio", aliases: [] }], items: [], sessions: [], blocks: [] };
+    const text = "Add web work for Cedar Studio: page edits, two hours.";
+    const dateSelection = { start: "2026-09-09", end: "2026-09-11", kind: "work_window" as const };
+    provider.parse.mockResolvedValueOnce({ output_parsed: { kind: "commands", message: "Prepared", draft: null, actions: [{ ...emptyAssistantAction("create", text), clientName: "Cedar Studio", title: "Page edits", category: "web", webKind: "edit", estimatedMinutes: 120 }] } });
+    const result = await interpretInput(text, state, state.actor, { now, dateSelection });
+    expect(result.commands[0]).toMatchObject({ item: { windowStart: dateSelection.start, windowEnd: dateSelection.end, estimatedMinutes: 120 } });
+    expect(provider.parse).toHaveBeenCalledWith(expect.objectContaining({ model: "gpt-5.6-sol", store: false, input: [expect.objectContaining({ role: "developer", content: expect.stringContaining(`"selectedDates":${JSON.stringify(dateSelection)}`) }), { role: "user", content: text }] }));
+  });
   it("sends retained task/date plus latest short answer and validates their combined evidence", async () => {
     vi.stubEnv("OPENAI_API_KEY", "offline-provider-test-placeholder");
     const now = new Date("2026-09-07T14:00:00Z");

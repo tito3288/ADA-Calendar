@@ -46,7 +46,15 @@ import { CalendarContent, type CalendarView } from "./calendar";
 import { api, ApiError, dateLabel, Empty, Field, Modal, timeLabel } from "./ui";
 import { WorkForm, ProposalCard } from "./work-form";
 import { WorkDetails } from "./work-details";
-import { AssistantPanel } from "./assistant-panel";
+import {
+  AssistantPanel,
+  emptyAssistantDraft,
+  selectedDatesLabel,
+} from "./assistant-panel";
+import {
+  dateSelectionSchema,
+  type AssistantDateSelection,
+} from "@/lib/assistant-date-selection";
 import { SettingsPanel } from "./settings-panel";
 import { RequestReview, RequestAttachments } from "./request-review";
 import { BrandLogo } from "./brand-logo";
@@ -156,6 +164,12 @@ export function Workspace({ initialState }: { initialState: AppState }) {
   const [form, setForm] = useState(false);
   const [editing, setEditing] = useState(false);
   const [assistant, setAssistant] = useState(false);
+  const [assistantDraft, setAssistantDraft] = useState(emptyAssistantDraft);
+  const [dateSelection, setDateSelection] =
+    useState<AssistantDateSelection | null>(null);
+  const [selectingDates, setSelectingDates] = useState(false);
+  const [selectionAnchor, setSelectionAnchor] = useState<string | null>(null);
+  const [confirmNewSelection, setConfirmNewSelection] = useState(false);
   const [settings, setSettings] = useState(false);
   const [help, setHelp] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
@@ -169,6 +183,43 @@ export function Workspace({ initialState }: { initialState: AppState }) {
   const [blockEnd, setBlockEnd] = useState("10:00");
   const [blockKind, setBlockKind] = useState<"meeting" | "time_off">("meeting");
   const owner = state.actor.role === "owner";
+  function beginDateSelection() {
+    setAssistantDraft(emptyAssistantDraft());
+    setDateSelection(null);
+    setSelectionAnchor(null);
+    setConfirmNewSelection(false);
+    setSection("calendar");
+    setView("month");
+    setSelectingDates(true);
+  }
+  function pickDate(day: string) {
+    if (!selectingDates) {
+      setDate(day);
+      setView("day");
+      return;
+    }
+    if (!selectionAnchor) {
+      setDateSelection({
+        start: day,
+        end: day,
+        kind: dateSelection?.kind ?? "work_window",
+      });
+      setSelectionAnchor(day);
+    } else {
+      const [start, end] = [selectionAnchor, day].sort();
+      const selection = dateSelectionSchema.safeParse({
+        start,
+        end,
+        kind: dateSelection?.kind ?? "work_window",
+      });
+      if (!selection.success) {
+        setNotice("Choose a date range of up to 366 days.");
+        return;
+      }
+      setDateSelection(selection.data);
+      setSelectionAnchor(null);
+    }
+  }
   function setNotice(message: string) {
     // A fresh object also restarts the timer for consecutive identical notices.
     setNoticeState(message ? { message } : null);
@@ -176,7 +227,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
   useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => {
-      setNoticeState((current) => current === notice ? null : current);
+      setNoticeState((current) => (current === notice ? null : current));
     }, 4000);
     return () => window.clearTimeout(timer);
   }, [notice]);
@@ -192,12 +243,25 @@ export function Workspace({ initialState }: { initialState: AppState }) {
   useEffect(() => {
     const refresh = () => {
       void api<AppState>("state")
-        .then(setState)
+        .then((next) => {
+          // Never carry a private draft across an account/workspace change.
+          if (
+            next.actor.id !== initialState.actor.id ||
+            next.workspaceId !== initialState.workspaceId ||
+            next.actor.role !== initialState.actor.role
+          )
+            window.location.reload();
+          else setState(next);
+        })
         .catch(() => {});
     };
     window.addEventListener("focus", refresh);
     return () => window.removeEventListener("focus", refresh);
-  }, []);
+  }, [
+    initialState.actor.id,
+    initialState.actor.role,
+    initialState.workspaceId,
+  ]);
   function update(next: AppState) {
     const addedEmail = next.notifications.some(
       (n) => !state.notifications.some((previous) => previous.id === n.id),
@@ -509,8 +573,27 @@ export function Workspace({ initialState }: { initialState: AppState }) {
             {state.actor.role !== "viewer" && (
               <>
                 <button
+                  className="secondary"
+                  disabled={assistantDraft.busy}
+                  onClick={() => {
+                    if (
+                      assistantDraft.text.trim() ||
+                      assistantDraft.replyToOperationId ||
+                      assistantDraft.proposal
+                    )
+                      setConfirmNewSelection(true);
+                    else beginDateSelection();
+                  }}
+                >
+                  <CalendarDays size={16} />
+                  Select dates
+                </button>
+                <button
                   className="secondary assistant-trigger"
-                  onClick={() => setAssistant(true)}
+                  onClick={() => {
+                    setSelectingDates(false);
+                    setAssistant(true);
+                  }}
                 >
                   <Sparkles size={16} />
                   Ask ADA
@@ -636,6 +719,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                         <button
                           className={view === v ? "active" : ""}
                           key={v}
+                          disabled={selectingDates && v !== "month"}
                           onClick={() => setView(v)}
                         >
                           {v}
@@ -658,16 +742,92 @@ export function Workspace({ initialState }: { initialState: AppState }) {
             )}
             {section === "calendar" && (
               <>
+                {selectingDates && (
+                  <div className="date-selection-toolbar">
+                    <div aria-live="polite">
+                      <p className="eyebrow">DATES FOR ASK ADA</p>
+                      <strong>
+                        {dateSelection
+                          ? selectedDatesLabel(dateSelection)
+                          : "Choose a day on the calendar"}
+                      </strong>
+                      <p className="micro muted">
+                        {selectionAnchor
+                          ? "Choose a second day for a range, or Ask ADA about this day."
+                          : dateSelection
+                            ? "Your range is selected. Another click starts a new range."
+                            : "Click once for one day, then another day for a range. You can move between months."}
+                      </p>
+                      <p className="micro muted">
+                        {dateSelection?.kind === "project_span"
+                          ? "Timeline only. No hours are reserved."
+                          : "Schedule within these dates, not on every day. Capacity checks still apply."}
+                      </p>
+                    </div>
+                    <div className="date-selection-actions">
+                      {owner && dateSelection && (
+                        <label className="micro">
+                          Use dates as
+                          <select
+                            aria-label="Use selected dates as"
+                            value={dateSelection.kind}
+                            onChange={(e) =>
+                              setDateSelection({
+                                ...dateSelection,
+                                kind: e.target
+                                  .value as AssistantDateSelection["kind"],
+                              })
+                            }
+                          >
+                            <option value="work_window">Work window</option>
+                            <option value="project_span">
+                              Project timeline only
+                            </option>
+                          </select>
+                        </label>
+                      )}
+                      <button
+                        className="secondary"
+                        onClick={() => {
+                          setDateSelection(null);
+                          setSelectionAnchor(null);
+                        }}
+                      >
+                        Clear selection
+                      </button>
+                      <button
+                        className="secondary"
+                        onClick={() => {
+                          setSelectingDates(false);
+                          setDateSelection(null);
+                          setSelectionAnchor(null);
+                        }}
+                      >
+                        Cancel selection
+                      </button>
+                      <button
+                        className="primary"
+                        disabled={!dateSelection}
+                        onClick={() => {
+                          setSelectingDates(false);
+                          setAssistant(true);
+                        }}
+                      >
+                        <Sparkles size={16} />
+                        Ask ADA about these dates
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <CalendarContent
                   state={state}
                   date={date}
                   items={calendarItems}
                   view={view}
                   onSelect={setSelectedId}
-                  onDate={(d) => {
-                    setDate(d);
-                    setView("day");
-                  }}
+                  selectingDates={selectingDates}
+                  dateSelection={selectingDates ? dateSelection : null}
+                  onDate={pickDate}
                   onCommand={async (c) => {
                     try {
                       await command(c);
@@ -959,7 +1119,11 @@ export function Workspace({ initialState }: { initialState: AppState }) {
             <div className="reserve-card">
               <Coffee size={18} />
               <div>
-                <strong>{state.settings.reserveMinutes > 0 ? "Room for the unexpected" : "No automatic buffer"}</strong>
+                <strong>
+                  {state.settings.reserveMinutes > 0
+                    ? "Room for the unexpected"
+                    : "No automatic buffer"}
+                </strong>
                 <p>
                   {state.settings.reserveMinutes > 0
                     ? `${formatHours(state.settings.reserveMinutes)} reserved each workday. Only Bryan can use this time.`
@@ -1119,8 +1283,35 @@ export function Workspace({ initialState }: { initialState: AppState }) {
         )}
       </Modal>
       <Modal
+        open={confirmNewSelection}
+        onClose={() => setConfirmNewSelection(false)}
+        title="Start a new instruction?"
+      >
+        <p>
+          Your current ADA draft or follow-up is still open. Starting a new date
+          selection will clear that unsent conversation; saved work will not
+          change.
+        </p>
+        <div className="form-actions">
+          <button
+            className="secondary"
+            onClick={() => {
+              setConfirmNewSelection(false);
+              setAssistant(true);
+            }}
+          >
+            Keep current instruction
+          </button>
+          <button className="primary" onClick={beginDateSelection}>
+            Start a new instruction
+          </button>
+        </div>
+      </Modal>
+      <Modal
         open={assistant}
-        onClose={() => setAssistant(false)}
+        onClose={() => {
+          if (!assistantDraft.busy) setAssistant(false);
+        }}
         title="Ask ADA"
         description="Less organizing. More room to work."
         wide
@@ -1128,6 +1319,10 @@ export function Workspace({ initialState }: { initialState: AppState }) {
         <AssistantPanel
           key={`${state.workspaceId}-${state.actor.id}`}
           state={state}
+          draft={assistantDraft}
+          onDraft={setAssistantDraft}
+          dateSelection={dateSelection}
+          onDateSelection={setDateSelection}
           onState={(next) => {
             update(next);
             if (next.emailDrafts.some((d) => d.status === "draft"))
@@ -1180,7 +1375,8 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                   setRequestId(null);
                 } catch (e) {
                   setNotice((e as Error).message);
-                  if (e instanceof ApiError && e.proposal) setProposal(e.proposal);
+                  if (e instanceof ApiError && e.proposal)
+                    setProposal(e.proposal);
                   if (e instanceof ApiError && e.state) update(e.state);
                 } finally {
                   setBusy(false);
