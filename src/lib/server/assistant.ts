@@ -80,7 +80,7 @@ function groundedDate(date: string, source: string, today: string, defaultToday:
   if (new RegExp(`\\b${day}\\b`, "i").test(source) && date >= today && date <= addDays(today, 14)) return true;
   const month = monthNames[Number(date.slice(5, 7)) - 1];
   const dateNumber = Number(date.slice(8, 10));
-  if (new RegExp(`\\b${month}\\s+${dateNumber}(?:st|nd|rd|th)?\\b`, "i").test(source)) {
+  if (new RegExp(`\\b${month}(?:\\s*,\\s*|\\s+)${dateNumber}(?:st|nd|rd|th)?\\b`, "i").test(source)) {
     const years = source.match(/\b20\d{2}\b/g);
     return years ? years.includes(date.slice(0, 4)) : [today.slice(0, 4), String(Number(today.slice(0, 4)) + 1)].includes(date.slice(0, 4));
   }
@@ -173,6 +173,13 @@ export function compileInterpretation(raw: unknown, text: string, state: Context
     if (action.type === "create") {
       if (!client || !action.title || !action.category) return clarify("Please include the client, a short task description, and whether it is Web, IT, Landings, or Software.");
       if (action.estimatedMinutes === null && !/\b(?:unscheduled|no estimate|unknown effort)\b/i.test(action.sourceQuote)) return clarify("How many hours or minutes should I reserve for this work? You can also say unscheduled if you do not have an estimate yet.");
+      // These work dates have already passed source/date validation above. When
+      // extraction omits the start, anchor the timeline to the first actual work
+      // date, not today. Keep explicit project spans; finish/checkpoint dates
+      // alone (target, deadline, update, window end) do not establish a start.
+      const workDates = [...action.allowedDates, ...action.sessions.map(session => localDate(new Date(session.start), state.settings.timeZone))].sort();
+      const windowStart = action.windowStart ?? workDates[0] ?? today;
+      if (action.windowEnd && action.windowEnd < windowStart) return clarify("The end of the work window must be on or after its start.");
       const id = randomUUID();
       const item: WorkItem = {
         id, clientId: client.id, title: action.title.slice(0, 200), description: (action.description ?? "").slice(0, 12_000),
@@ -180,7 +187,7 @@ export function compileInterpretation(raw: unknown, text: string, state: Context
         requesterId: actor.id, requestedBy: actor.name, priorityId: (actor.role === "owner" ? priority?.id : null) ?? state.priorities.find((p) => p.id === "normal")?.id ?? state.priorities[0]?.id ?? "normal",
         requestedPriorityId: actor.role === "requester" ? priority?.id ?? null : null, status: "planned",
         estimatedMinutes: action.estimatedMinutes, remainingMinutes: action.estimatedMinutes,
-        windowStart: action.windowStart ?? today, windowEnd: action.windowEnd, targetDate: action.targetDate, deadline: action.deadline,
+        windowStart, windowEnd: action.windowEnd, targetDate: action.targetDate, deadline: action.deadline,
         forecastDate: null, completedAt: null, blockedReason: null, minimumSessionMinutes: action.minimumSessionMinutes ?? (action.category === "software" || (action.category === "web" && action.webKind === "build") ? 120 : state.settings.slotMinutes),
         allowedDates: action.allowedDates, checklist: [], progressTotal: action.progressTotal, progressCompleted: 0, updateDate: action.updateDate,
         references: action.references.filter((url) => /^https?:\/\//i.test(url) && text.includes(url)), createdAt: now.toISOString(), updatedAt: now.toISOString(),

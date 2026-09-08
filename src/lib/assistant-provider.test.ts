@@ -32,4 +32,28 @@ describe("Responses adapter follow-up context (mocked provider, no paid calls)",
     provider.parse.mockResolvedValueOnce({ output_parsed: { kind: "commands", message: "Prepared", actions: [{ ...emptyAssistantAction("create", "Will it take 4 hours?"), clientName: "Higher Ground Tree", title: "Fix form", category: "it", estimatedMinutes: 240 }], draft: null } });
     expect((await interpretInput("Not sure", createDemoState(now.toISOString()), DEMO_MEMBERS[0], { continuation, now })).commands).toEqual([]);
   });
+  it("anchors a clarified single-day task to its work date when the provider omits its start", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "offline-provider-test-placeholder");
+    const now = new Date("2026-09-08T14:20:00Z");
+    const state = createDemoState(now.toISOString());
+    state.clients.push({ id: "test-cidwp", name: "CIDWP", aliases: [] });
+    const before = structuredClone(state);
+    const original = "CIDWP needs a new website build. I will work on the homepage demo from start to finish on September, 9th. It should take 3 hours.";
+    const reply = "The date is 2026-09-09. Allow 3 hours total for the CIDWP homepage demo only. The rest of the website will be scheduled later, after approval.";
+    const continuation = nextContinuation(original, { kind: "clarification", message: "Please confirm the dates using YYYY-MM-DD.", commands: [] }, now)!;
+    const evidence = `${original}\n${reply}`;
+    provider.parse.mockResolvedValueOnce({ output_parsed: { kind: "commands", message: "Prepared", actions: [{
+      ...emptyAssistantAction("create", evidence), clientName: "CIDWP", title: "Homepage demo", category: "web", webKind: "build",
+      estimatedMinutes: 180, targetDate: "2026-09-09", deadline: "2026-09-09", allowedDates: ["2026-09-09"],
+    }], draft: null } });
+    const result = await interpretInput(reply, state, DEMO_MEMBERS[0], { continuation, now });
+    expect(result.kind).toBe("commands");
+    expect(result.commands).toHaveLength(1);
+    expect(result.commands[0]).toMatchObject({ type: "create", item: {
+      clientId: "test-cidwp", title: "Homepage demo", estimatedMinutes: 180,
+      windowStart: "2026-09-09", targetDate: "2026-09-09", deadline: "2026-09-09", allowedDates: ["2026-09-09"],
+    } });
+    expect(state).toEqual(before);
+    expect(provider.parse).toHaveBeenCalledTimes(1);
+  });
 });
