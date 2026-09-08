@@ -160,7 +160,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
   const [help, setHelp] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
   const [proposal, setProposal] = useState<ScheduleProposal | null>(null);
-  const [notice, setNotice] = useState("");
+  const [notice, setNoticeState] = useState<{ message: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [requestId, setRequestId] = useState<string | null>(null);
   const [block, setBlock] = useState(false);
@@ -169,6 +169,17 @@ export function Workspace({ initialState }: { initialState: AppState }) {
   const [blockEnd, setBlockEnd] = useState("10:00");
   const [blockKind, setBlockKind] = useState<"meeting" | "time_off">("meeting");
   const owner = state.actor.role === "owner";
+  function setNotice(message: string) {
+    // A fresh object also restarts the timer for consecutive identical notices.
+    setNoticeState(message ? { message } : null);
+  }
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => {
+      setNoticeState((current) => current === notice ? null : current);
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
       if (window.matchMedia("(max-width: 760px)").matches) setView("agenda");
@@ -1037,7 +1048,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
         {notice && (
           <div className="toast" role="status">
             <CheckCircle2 size={17} />
-            <span>{notice}</span>
+            <span>{notice.message}</span>
             {owner &&
               state.events[0]?.version === state.version &&
               !state.events[0]?.undoneBy && (
