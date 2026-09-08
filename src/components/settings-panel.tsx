@@ -4,6 +4,9 @@ import { ArrowDown, ArrowUp, Plus, Save, UserPlus } from "lucide-react";
 import type { AppState } from "@/lib/types";
 import { api, Field } from "./ui";
 
+const parseAliases = (text: string) =>
+  text.split(",").map((alias) => alias.trim()).filter(Boolean);
+
 export function SettingsPanel({
   state,
   onState,
@@ -14,6 +17,8 @@ export function SettingsPanel({
   const [tab, setTab] = useState("hours");
   const [settings, setSettings] = useState(state.settings);
   const [clients, setClients] = useState(state.clients);
+  // Keep partially typed spaces and separators until the directory is saved.
+  const [aliasDrafts, setAliasDrafts] = useState<Record<string, string>>({});
   const [priorities, setPriorities] = useState(state.priorities);
   const [clientName, setClientName] = useState("");
   const [aliases, setAliases] = useState("");
@@ -48,7 +53,7 @@ export function SettingsPanel({
     return {
       id: crypto.randomUUID(),
       name: clientName.trim(),
-      aliases: aliases.split(",").map((alias) => alias.trim()).filter(Boolean),
+      aliases: parseAliases(aliases),
     };
   }
   async function saveDirectory() {
@@ -58,10 +63,17 @@ export function SettingsPanel({
       return;
     }
     // Submit the typed draft directly, not a stale React state update.
-    const directory = clientName.trim() ? [...clients, newClient()] : clients;
+    const editedClients = clients.map((client) => ({
+      ...client,
+      aliases: aliasDrafts[client.id] === undefined
+        ? client.aliases
+        : parseAliases(aliasDrafts[client.id]),
+    }));
+    const directory = clientName.trim() ? [...editedClients, newClient()] : editedClients;
     const next = await save({ type: "clients", clients: directory });
     if (next) {
       setClients(next.clients);
+      setAliasDrafts({});
       setClientName("");
       setAliases("");
     }
@@ -289,22 +301,10 @@ export function SettingsPanel({
                 <input
                   disabled={busy}
                   aria-label={`Aliases for ${c.name}`}
-                  value={c.aliases.join(", ")}
+                  value={aliasDrafts[c.id] ?? c.aliases.join(", ")}
                   placeholder="Aliases, separated by commas"
                   onChange={(e) =>
-                    setClients(
-                      clients.map((x) =>
-                        x.id === c.id
-                          ? {
-                              ...x,
-                              aliases: e.target.value
-                                .split(",")
-                                .map((s) => s.trim())
-                                .filter(Boolean),
-                            }
-                          : x,
-                      ),
-                    )
+                    setAliasDrafts({ ...aliasDrafts, [c.id]: e.target.value })
                   }
                 />
               </div>
