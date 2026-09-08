@@ -77,7 +77,7 @@ export function MonthCalendar({ state, date, items, onSelect, onDate }: Props) {
           <div
             className="calendar-week"
             key={week}
-            style={{ minHeight: Math.max(140, 70 + lanes.length * 31) }}
+            style={{ minHeight: Math.max(140, 100 + lanes.length * 31) }}
           >
             <div className="day-backgrounds">
               {days.map((d) => {
@@ -90,17 +90,21 @@ export function MonthCalendar({ state, date, items, onSelect, onDate }: Props) {
                     key={d}
                     className={`day-cell ${d.slice(0, 7) !== first.slice(0, 7) ? "outside-month" : ""} ${d === today ? "is-today" : ""} ${!isWorkday ? "weekend" : ""}`}
                     onClick={() => onDate(d)}
-                    aria-label={`${dateLabel(d, { weekday: "long", month: "long", day: "numeric" })}, ${formatHours(capacity.plannedMinutes)} planned`}
+                    aria-label={`${dateLabel(d, { weekday: "long", month: "long", day: "numeric" })}, ${isWorkday ? `${formatHours(capacity.availableMinutes)} available, ${formatHours(capacity.plannedMinutes)} planned` : "Non-working day"}`}
+                    title={isWorkday ? `${formatHours(capacity.availableMinutes)} left to book · ${formatHours(capacity.plannedMinutes)} planned · ${formatHours(capacity.capacityMinutes)} daily capacity. Lunch, interruption reserve and unavailable time are excluded.` : "Non-working day"}
                   >
                     <span className="day-number">{Number(d.slice(-2))}</span>
                     {isWorkday && (
-                      <span className="day-capacity">
-                        {formatHours(capacity.plannedMinutes)}
-                        <span> / {formatHours(capacity.capacityMinutes)}</span>
+                      <span className={`day-capacity ${capacity.availableMinutes === 0 ? "capacity-full" : capacity.availableMinutes <= 60 ? "capacity-low" : ""}`}>
+                        <span className="day-capacity-remaining">
+                          <strong>{formatHours(capacity.availableMinutes)}</strong>
+                          <span>left</span>
+                        </span>
+                        <small className="day-capacity-planned">{formatHours(capacity.plannedMinutes)} planned</small>
                       </span>
                     )}
                     {isWorkday && (
-                      <span className="capacity-line">
+                      <span className="capacity-line" aria-hidden="true">
                         <i
                           style={{
                             width: `${Math.min(100, (capacity.plannedMinutes / (capacity.capacityMinutes || 1)) * 100)}%`,

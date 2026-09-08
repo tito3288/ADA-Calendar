@@ -6,7 +6,7 @@ This is Bryan's private workload calendar. The approved implementation specifica
 - All calendar mutations must use the shared scheduler and server authorization. AI output is a proposal, never independent authority.
 - Requesters may book clean-fit work only. They cannot edit existing work. Displacement needs owner approval. Protected time requires an explicit owner override.
 - Faded project spans do not reserve time. Only work sessions consume capacity. Time passing is not completed work.
-- Preserve the 9–5 weekday boundary, 30-minute lunch, and one-hour interruption reserve.
+- Preserve the 9–5 weekday boundary, 30-minute lunch, and the saved interruption-reserve setting. The owner approved a zero-minute reserve on September 8, making 7.5 hours available; do not silently override persisted workspace settings.
 - Do not change shared types without coordinating dependent code. Keep SQL migrations and server validation consistent.
 - Use npm and the lockfile. Run appropriate tests, type checking, lint, and a production build. Verify browser workflows for UI changes.
 - Keep demo fixtures and captured mail clearly labeled and isolated from production. Production without credentials must fail closed.

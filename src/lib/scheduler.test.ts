@@ -54,6 +54,16 @@ describe("working-time arithmetic", () => {
     expect(dayCapacity(base, "2026-09-12")).toEqual({ plannedMinutes: 0, availableMinutes: 0, capacityMinutes: 0 });
   });
 
+  it("offers 450 ordinary minutes when the workspace disables reserve, with weekends still closed", () => {
+    const base = snapshot();
+    base.settings.reserveMinutes = 0;
+    expect(dayCapacity(base, DAY)).toEqual({ plannedMinutes: 0, availableMinutes: 450, capacityMinutes: 450 });
+    expect(dayCapacity(base, "2026-09-12")).toEqual({ plannedMinutes: 0, availableMinutes: 0, capacityMinutes: 0 });
+    expect(dayCapacity(base, "2026-09-13")).toEqual({ plannedMinutes: 0, availableMinutes: 0, capacityMinutes: 0 });
+    expect(validateSchedule(base, NOW)).toEqual([]);
+    expect(DEFAULT_SETTINGS.reserveMinutes).toBe(60);
+  });
+
   it("deducts unavailable time once even when it overlaps lunch", () => {
     const base = snapshot();
     base.blocks.push({ id: "meeting", title: "Meeting", start: at("11:30"), end: at("13:00"), kind: "meeting" });
@@ -62,6 +72,45 @@ describe("working-time arithmetic", () => {
 });
 
 describe("deterministic effort allocation", () => {
+  it("fills a 450-minute Friday with zero reserve while preserving lunch and the weekend boundary", () => {
+    const friday = "2026-09-11";
+    const base = snapshot();
+    base.settings.reserveMinutes = 0;
+    const work = item("weekend-spanning edit", 480, { windowStart: friday, targetDate: friday });
+    const result = planCommands(base, [{ type: "create", item: work }], owner, { now: at("08:00", friday) });
+    expect(result.status).toBe("ready");
+    expect(sessionsFor(result, work.id)).toEqual([
+      expect.objectContaining({ start: at("09:00", friday), end: at("12:00", friday), usesReserve: false }),
+      expect.objectContaining({ start: at("12:30", friday), end: at("17:00", friday), usesReserve: false }),
+      expect.objectContaining({ start: at("09:00", "2026-09-14"), end: at("09:30", "2026-09-14"), usesReserve: false }),
+    ]);
+    expect(dayCapacity(apply(base, result), friday)).toEqual({ plannedMinutes: 450, availableMinutes: 0, capacityMinutes: 450 });
+    expect(validateSchedule(apply(base, result), at("08:00", friday))).toEqual([]);
+  });
+
+  it.each([owner, requester])("lets a $role book 16:00–17:00 normally after disabling reserve without moving existing sessions", (actor) => {
+    const old = item("existing", 390, { forecastDate: DAY });
+    const base = snapshot([old], [session(old.id, "09:00", "12:00", { protected: true }), session(old.id, "12:30", "16:00")]);
+    const original = structuredClone(base);
+    expect(dayCapacity(base, DAY)).toEqual({ plannedMinutes: 390, availableMinutes: 0, capacityMinutes: 390 });
+    const updated = { ...base, settings: { ...base.settings, reserveMinutes: 0 } };
+    expect(dayCapacity(updated, DAY)).toEqual({ plannedMinutes: 390, availableMinutes: 60, capacityMinutes: 450 });
+    const work = item("normal edit", 60, { deadline: DAY });
+    const result = planCommands(updated, [{ type: "create", item: work }], actor, { now: NOW });
+    expect(result.status).toBe("ready");
+    expect(result.requiresApproval).toBe(false);
+    expect(result.conflicts).toEqual([]);
+    expect(sessionsFor(result, work.id)).toEqual([
+      expect.objectContaining({ start: at("16:00"), end: at("17:00"), usesReserve: false, protected: false }),
+    ]);
+    expect(sessionsFor(result, old.id)).toEqual(original.sessions);
+    expect(result.items.find((entry) => entry.id === old.id)).toEqual(original.items[0]);
+    expect(result.affectedItemIds).toEqual([work.id]);
+    expect(dayCapacity(apply(updated, result), DAY)).toEqual({ plannedMinutes: 450, availableMinutes: 0, capacityMinutes: 450 });
+    expect(validateSchedule(apply(updated, result), NOW)).toEqual([]);
+    expect(base).toEqual(original);
+  });
+
   it("splits work across lunch and weekdays without changing the input", () => {
     const base = snapshot();
     const original = JSON.stringify(base);

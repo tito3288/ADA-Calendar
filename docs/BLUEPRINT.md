@@ -10,7 +10,7 @@ Bryan wears four hats: Web (edits/builds), IT, Landings, and Software. Kyle, Wil
 
 ## Locked product decisions
 
-- Timezone America/Indiana/Indianapolis; weekdays 9–17, lunch 12–12:30, interruption reserve 16–17; ordinary project capacity 390 minutes/day. Settings editable by Bryan.
+- Timezone America/Indiana/Indianapolis; weekdays 9–17, lunch 12–12:30. September 8 owner preference: no automatic interruption reserve (reserveMinutes 0), making 450 minutes/day available for ordinary projects; unexpected work is added as it arises. Persisted workspace settings remain authoritative and are editable by Bryan; changing code must not silently replace saved settings or move existing bookings. A workspace configured with a 60-minute reserve still has 390 minutes/day.
 - Owner Bryan; Kyle/William requesters; invited teammates may be viewers/requesters. All see the shared agency workload; transcripts/drafts are private.
 - September 7 sign-in decision: use email and password with persistent, server-managed sessions. No public signup. Initial invitations let each person create their own password; forgotten passwords use recovery email. Normal sign-in does not request an email link. Passwords are handled by Supabase Auth, never saved in workload records or returned in API responses.
 - Requesters supply effort. Clean-fit submissions commit automatically, notifying Bryan. A request that changes existing commitments waits for Bryan's approval. Requesters never edit/delete scheduled work, even their own. Requested priority is advisory; effective priority defaults Normal.

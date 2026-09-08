@@ -959,10 +959,11 @@ export function Workspace({ initialState }: { initialState: AppState }) {
             <div className="reserve-card">
               <Coffee size={18} />
               <div>
-                <strong>Room for the unexpected</strong>
+                <strong>{state.settings.reserveMinutes > 0 ? "Room for the unexpected" : "No automatic buffer"}</strong>
                 <p>
-                  {formatHours(state.settings.reserveMinutes)} reserved each
-                  workday. Only Bryan can use this time.
+                  {state.settings.reserveMinutes > 0
+                    ? `${formatHours(state.settings.reserveMinutes)} reserved each workday. Only Bryan can use this time.`
+                    : "All working hours after lunch are available. Add unexpected work when it comes up."}
                 </p>
               </div>
             </div>

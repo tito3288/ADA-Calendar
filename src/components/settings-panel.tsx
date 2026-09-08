@@ -154,7 +154,7 @@ export function SettingsPanel({
                 }
               />
             </Field>
-            <Field label="Reserve minutes">
+            <Field label="Reserve minutes" hint="Set to 0 to make this time available for planned work. You can add unexpected work when it comes up.">
               <input
                 type="number"
                 min="0"
