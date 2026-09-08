@@ -32,8 +32,26 @@ export function readContinuation(result: unknown, now: Date, timeZone: string, a
   return continuation;
 }
 
+function acceptsPendingBacklog(text: string, continuation: AssistantContinuation) {
+  // This is a clarification answer, not permission to merge arbitrary new add commands.
+  // Match the entire reply so hours, dates, overrides, or a second task cannot be
+  // smuggled into the original pending work through this exception.
+  const acceptance = text.trim().match(/^(?:please\s+)?(?:add|create)\s+(.+?)\s+for\s+(.+?)(?:\s+now)?\s+as\s+unscheduled\s+work\s+(?:with\s+no|without\s+an?)\s+estimate[.!]?$/i);
+  if (!acceptance) return false;
+  const normalize = (value: string) => value.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const title = normalize(acceptance[1]);
+  const client = normalize(acceptance[2]);
+  if (!title || !client) return false;
+  // ADA's question may suggest a title or even the wrong client. It is never
+  // authority: require both references together in an earlier user instruction.
+  return continuation.turns.some(({ userText }) => {
+    const prior = ` ${normalize(userText)} `;
+    return prior.includes(` ${title} `) && prior.includes(` ${client} `);
+  });
+}
+
 export function conversationText(text: string, continuation?: AssistantContinuation) {
-  if (continuation && /^(?:(?:instead|actually|also|separately)[,\s]+)?(?:please\s+)?(?:add|create|book|schedule(?!\s+(?:it|that|this|the (?:same )?(?:task|work))\b))\b|^(?:never\s*mind|forget (?:that|it)|cancel that)[,;.]+/i.test(text.trim()))
+  if (continuation && /^(?:(?:instead|actually|also|separately)[,\s]+)?(?:please\s+)?(?:add|create|book|schedule(?!\s+(?:it|that|this|the (?:same )?(?:task|work))\b))\b|^(?:never\s*mind|forget (?:that|it)|cancel that)[,;.]+/i.test(text.trim()) && !acceptsPendingBacklog(text, continuation))
     throw new Error("That looks like a new task. Use Start a new instruction before sending it; the pending work has not been changed.");
   const combined = [...(continuation?.turns.map(turn => turn.userText) ?? []), text].join("\n");
   if (combined.length > MAX_ASSISTANT_INPUT || (continuation?.turns.length ?? 0) >= MAX_CLARIFICATION_TURNS)

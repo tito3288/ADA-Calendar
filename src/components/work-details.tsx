@@ -193,7 +193,7 @@ export function WorkDetails({
 }) {
   const owner = state.actor.role === "owner";
   const [remaining, setRemaining] = useState(
-    String((item.remainingMinutes ?? 0) / 60),
+    item.remainingMinutes === null ? "" : String(item.remainingMinutes / 60),
   );
   const [completed, setCompleted] = useState(item.progressCompleted);
   const [reason, setReason] = useState("");
@@ -214,6 +214,13 @@ export function WorkDetails({
     (n, s) => n + minutesBetween(s.start, s.end),
     0,
   );
+  const remainingMinutes = remaining.trim() === "" ? undefined : Number(remaining) * 60;
+  const validRemaining = remainingMinutes === undefined || (
+    Number.isInteger(remainingMinutes) && remainingMinutes >= 0 && remainingMinutes <= 100_000
+  );
+  const canResume = validRemaining && (item.estimatedMinutes === null
+    ? remainingMinutes !== undefined && remainingMinutes > 0
+    : remainingMinutes !== undefined || item.remainingMinutes !== null);
   async function command(c: WorkCommand) {
     setBusy(true);
     setError("");
@@ -465,7 +472,10 @@ export function WorkDetails({
             Progress & status
           </h3>
           <div className="form-grid">
-            <Field label="Remaining hours">
+            <Field
+              label="Remaining hours"
+              hint={item.remainingMinutes === null ? "Not estimated yet. Enter hours when you know the remaining work." : undefined}
+            >
               <input
                 type="number"
                 min="0"
@@ -488,12 +498,12 @@ export function WorkDetails({
           </div>
           <button
             className="secondary"
-            disabled={busy}
+            disabled={busy || !validRemaining || (remainingMinutes === undefined && completed === item.progressCompleted)}
             onClick={() =>
               command({
                 type: "progress",
                 itemId: item.id,
-                remainingMinutes: Number(remaining) * 60,
+                ...(remainingMinutes !== undefined ? { remainingMinutes } : {}),
                 progressCompleted: completed,
               })
             }
@@ -512,12 +522,13 @@ export function WorkDetails({
               {item.status === "waiting" ? (
                 <button
                   className="secondary"
+                  disabled={busy || !canResume}
                   onClick={() =>
                     command({
                       type: "status",
                       itemId: item.id,
                       status: "in_progress",
-                      remainingMinutes: Number(remaining) * 60,
+                      ...(remainingMinutes !== undefined ? { remainingMinutes } : {}),
                     })
                   }
                 >

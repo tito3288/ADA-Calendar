@@ -146,6 +146,7 @@ export function WorkForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [operationId, setOperationId] = useState(() => crypto.randomUUID());
+  const allowUnknownEffort = existing?.status === "waiting" && existing.remainingMinutes === null;
   function patch(p: Partial<WorkItem>) {
     setItem({ ...item, ...p });
     setProposal(null);
@@ -337,20 +338,22 @@ export function WorkForm({
           label={
             existing ? "Remaining effort (hours)" : "Estimated effort (hours)"
           }
-          hint="Work time, not the number of days it spans."
+          hint={allowUnknownEffort
+            ? "Leave blank while the effort is unknown. Saving hours does not resume waiting work."
+            : "Work time, not the number of days it spans."}
         >
           <input
             type="number"
             min="0.25"
             max="1000"
             step="0.25"
-            required
-            value={(item.remainingMinutes ?? 0) / 60}
+            required={!allowUnknownEffort}
+            value={item.remainingMinutes === null ? "" : item.remainingMinutes / 60}
             onChange={(e) =>
               patch({
-                remainingMinutes: Number(e.target.value) * 60,
+                remainingMinutes: e.target.value === "" ? null : Number(e.target.value) * 60,
                 ...(!existing
-                  ? { estimatedMinutes: Number(e.target.value) * 60 }
+                  ? { estimatedMinutes: e.target.value === "" ? null : Number(e.target.value) * 60 }
                   : {}),
               })
             }

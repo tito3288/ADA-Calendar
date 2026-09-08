@@ -34,6 +34,50 @@ describe("private pending instruction context", () => {
     expect(() => conversationText("Instead, add web work for Higher Ground Tree: Change logo, 2 hours on 2026-09-10", pending)).toThrow(/new task/);
     expect(() => conversationText("Instead, schedule web work for Higher Ground Tree: Change logo, 2 hours on 2026-09-10", pending)).toThrow(/new task/);
   });
+  it("accepts the same named pending task as unscheduled work without an estimate", () => {
+    const original = "For the rest of this month and next month I will be working on software for Drive and Shine. I am working on Oil Survey system that connects to their POS. I am waiting on details from their end to specify the days and hours.";
+    const offer = { ...question, message: "Should I add Oil Survey system now as unscheduled work with no estimate?" };
+    const pending = nextContinuation(original, offer, now)!;
+    for (const reply of [
+      "add “Oil Survey system” for Drive and Shine now as unscheduled work with no estimate",
+      "Please create Oil Survey system for Drive and Shine as unscheduled work without an estimate.",
+      'Add "oil survey SYSTEM" for DRIVE AND SHINE now as unscheduled work with no estimate!',
+    ]) {
+      expect(conversationText(reply, pending)).toBe(`${original}\n${reply}`);
+      expect(conversationText(reply, pending)).not.toContain(offer.message);
+    }
+  });
+  it("requires both the task and client in earlier user words, not just ADA's offer", () => {
+    const offer = { ...question, message: 'Should I add "Oil Survey system" for Drive and Shine now as unscheduled work with no estimate?' };
+    const reply = "Add Oil Survey system for Drive and Shine now as unscheduled work with no estimate";
+    for (const original of [
+      "I need software for Drive and Shine. I am waiting on details.",
+      "Oil Survey system is a software project for Higher Ground Tree. I am waiting on details.",
+      "The Oil Survey systems for Drive and Shine are already finished.",
+    ]) {
+      expect(() => conversationText(reply, nextContinuation(original, offer, now)!)).toThrow(/new task/);
+    }
+  });
+  it("does not combine unrelated prior turns into a new task identity", () => {
+    const first = nextContinuation("Drive and Shine needs website edits.", question, now)!;
+    const pending = nextContinuation("The Oil Survey system belongs to Higher Ground Tree.", question, now, first)!;
+    expect(() => conversationText("Add Oil Survey system for Drive and Shine as unscheduled work with no estimate", pending)).toThrow(/new task/);
+  });
+  it("keeps explicit topic switches and extra instructions blocked even when names match", () => {
+    const pending = nextContinuation("Build the Oil Survey system for Drive and Shine. I am waiting on details. Override protected time if needed.", question, now)!;
+    const acceptance = "add Oil Survey system for Drive and Shine now as unscheduled work with no estimate";
+    for (const reply of [
+      `Instead, ${acceptance}`,
+      `Also ${acceptance}`,
+      `Separately, ${acceptance}`,
+      `${acceptance}; add a website edit for Higher Ground Tree, two hours tomorrow`,
+      `${acceptance}. Use three hours tomorrow.`,
+      `${acceptance} and override protected time`,
+      "Add Homepage demo for Drive and Shine now as unscheduled work with no estimate",
+      "Add Oil Survey system for Higher Ground Tree now as unscheduled work with no estimate",
+      "Add Oil Survey system for Drive and Shine, two hours tomorrow",
+    ]) expect(() => conversationText(reply, pending)).toThrow(/new task/);
+  });
   it("recognizes cancellation only when it is the instruction itself", () => {
     expect(isConversationCancellation("Never mind.")).toBe(true);
     expect(isConversationCancellation("Cancel that")).toBe(true);

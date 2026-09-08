@@ -151,13 +151,21 @@ function itemConflicts(snapshot: ScheduleSnapshot, item: WorkItem): ScheduleConf
   if (!snapshot.clients.some((client) => client.id === item.clientId)) add("unknown_client", `Choose an existing client for “${item.title}”.`);
   if (!item.title.trim()) add("missing_title", "Work needs a title.");
   if (!snapshot.priorities.some((priority) => priority.id === item.priorityId)) add("unknown_priority", `“${item.title}” has an unknown priority.`);
-  if (item.estimatedMinutes === null || !Number.isFinite(item.estimatedMinutes) || item.estimatedMinutes <= 0) add("missing_estimate", `“${item.title}” needs a positive effort estimate.`);
-  if (item.remainingMinutes === null || !Number.isFinite(item.remainingMinutes) || item.remainingMinutes < 0) add("invalid_remaining", `“${item.title}” needs a nonnegative remaining-effort estimate.`);
+  if (item.estimatedMinutes === null ? liveItem(item) : !Number.isFinite(item.estimatedMinutes) || item.estimatedMinutes <= 0) add("missing_estimate", `“${item.title}” needs a positive effort estimate before reserving time.`);
+  if (item.remainingMinutes === null ? liveItem(item) : !Number.isFinite(item.remainingMinutes) || item.remainingMinutes < 0) add("invalid_remaining", `“${item.title}” needs a nonnegative remaining-effort estimate before reserving time.`);
   if (!Number.isFinite(item.minimumSessionMinutes) || item.minimumSessionMinutes <= 0) add("invalid_focus", `“${item.title}” needs a positive minimum session length.`);
   if (!isDate(item.windowStart) || [item.windowEnd, item.targetDate, item.deadline, item.updateDate, ...item.allowedDates].some((date) => date !== null && !isDate(date))) add("invalid_date", `“${item.title}” has an invalid calendar date.`);
   if (item.deadline && item.deadline < item.windowStart) add("deadline_before_start", `“${item.title}” has a firm deadline before its start date.`);
   if (item.progressCompleted < 0 || (item.progressTotal !== null && item.progressCompleted > item.progressTotal)) add("invalid_progress", `“${item.title}” has an invalid progress count.`);
   return errors;
+}
+
+// Unknown is not zero. The first explicitly supplied remaining-hours estimate
+// establishes the total only when there was no estimate; later progress must
+// preserve the original total and must not implicitly resume waiting work.
+function initializeEstimate(item: WorkItem, remaining: number | null | undefined) {
+  if (item.estimatedMinutes === null && remaining !== null && remaining !== undefined && Number.isFinite(remaining) && remaining > 0)
+    item.estimatedMinutes = remaining;
 }
 
 /** Checks hard calendar invariants. Missing future effort is validated by the planner for
@@ -389,16 +397,25 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
         if (patch.status === "completed") { errors.push(conflict("completion_command", "Use an explicit completion action to finish work.", [item.id])); continue; }
         if ("deadline" in patch && item.deadline && patch.deadline !== item.deadline && !command.overrideDeadline) { errors.push(conflict("firm_deadline", "Changing a firm deadline requires Bryan’s explicit override.", [item.id])); continue; }
         if (patch.estimatedMinutes !== undefined && patch.estimatedMinutes !== null && patch.remainingMinutes === undefined) patch.remainingMinutes = Math.max(0, patch.estimatedMinutes - Math.max(0, (item.estimatedMinutes ?? 0) - (item.remainingMinutes ?? 0)));
+        const firstEstimate = item.estimatedMinutes === null;
         Object.assign(item, patch);
+        if (firstEstimate) initializeEstimate(item, patch.remainingMinutes);
         if (Object.keys(patch).some((key) => schedulingFields.has(key))) scheduleIds.add(item.id);
         item.updatedAt = now; summaries.push(`Updated ${item.title}.`);
       } else if (command.type === "progress") {
-        if (command.remainingMinutes !== undefined) { item.remainingMinutes = command.remainingMinutes; scheduleIds.add(item.id); }
+        if (command.remainingMinutes !== undefined) { item.remainingMinutes = command.remainingMinutes; initializeEstimate(item, command.remainingMinutes); scheduleIds.add(item.id); }
         if (command.progressCompleted !== undefined) item.progressCompleted = command.progressCompleted;
         if (command.checklist !== undefined) item.checklist = clone(command.checklist);
         item.updatedAt = now; summaries.push(`Updated progress on ${item.title}.`);
       } else if (command.type === "status") {
-        if (command.remainingMinutes !== undefined) item.remainingMinutes = command.remainingMinutes;
+        if (command.remainingMinutes !== undefined) {
+          if (!Number.isFinite(command.remainingMinutes) || command.remainingMinutes < 0) {
+            errors.push(conflict("invalid_remaining", "Remaining effort must be a nonnegative number.", [item.id]));
+            continue;
+          }
+          item.remainingMinutes = command.remainingMinutes;
+          initializeEstimate(item, command.remainingMinutes);
+        }
         item.status = command.status; item.updatedAt = now;
         item.blockedReason = command.status === "waiting" ? command.reason ?? "Waiting for a dependency" : null;
         if (command.status === "completed") { item.remainingMinutes = 0; item.completedAt = now; }
@@ -432,6 +449,10 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
       errors.push(...itemConflicts(draft, item));
       if (errors.length) continue;
       if (!liveItem(item)) {
+        if (explicitIds.has(id) || commands.some(command => command.type === "schedule" && command.itemId === id)) {
+          errors.push(conflict("inactive_work", `“${item.title}” is ${item.status}. Resume it with an effort estimate before scheduling time.`, [id]));
+          continue;
+        }
         // Explicit completion/cancellation releases its own reservation, including protected
         // time. Merely pausing/waiting still needs permission to remove protected sessions.
         const release = cancelFuture(draft, id, now, protectedOverride(id) || item.status === "completed" || item.status === "cancelled");
