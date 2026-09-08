@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Plus, Save, UserPlus } from "lucide-react";
 import type { AppState } from "@/lib/types";
 import { api, Field } from "./ui";
@@ -22,20 +22,48 @@ export function SettingsPanel({
   const [role, setRole] = useState("requester");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const saveInFlight = useRef(false);
   async function save(body: unknown, route = "admin") {
+    if (saveInFlight.current) return;
+    saveInFlight.current = true;
     setBusy(true);
     setMessage("");
     try {
-      onState((await api(route, body)).state);
+      const next = (await api(route, body)).state;
+      onState(next);
       setMessage(
         state.mode === "demo" && route === "members/invite"
           ? "Demo member saved. No invitation was sent."
           : "Saved.",
       );
+      return next;
     } catch (e) {
       setMessage((e as Error).message);
     } finally {
+      saveInFlight.current = false;
       setBusy(false);
+    }
+  }
+  function newClient() {
+    return {
+      id: crypto.randomUUID(),
+      name: clientName.trim(),
+      aliases: aliases.split(",").map((alias) => alias.trim()).filter(Boolean),
+    };
+  }
+  async function saveDirectory() {
+    if (saveInFlight.current) return;
+    if (!clientName.trim() && aliases.trim()) {
+      setMessage("Enter a new client name for these aliases before saving.");
+      return;
+    }
+    // Submit the typed draft directly, not a stale React state update.
+    const directory = clientName.trim() ? [...clients, newClient()] : clients;
+    const next = await save({ type: "clients", clients: directory });
+    if (next) {
+      setClients(next.clients);
+      setClientName("");
+      setAliases("");
     }
   }
   return (
@@ -231,15 +259,23 @@ export function SettingsPanel({
         </form>
       )}
       {tab === "clients" && (
-        <div>
+        <form
+          onChange={() => setMessage("")}
+          onSubmit={(e) => {
+            e.preventDefault();
+            void saveDirectory();
+          }}
+        >
           <h3>Your client directory</h3>
           <p className="muted">
-            Aliases help ADA recognize the names you use in conversation.
+            Aliases are optional and help ADA recognize the names you use in
+            conversation. Save directory also saves the new client entered below.
           </p>
           <div className="client-editor-list">
             {clients.map((c) => (
               <div key={c.id}>
                 <input
+                  disabled={busy}
                   aria-label={`Name for ${c.name}`}
                   value={c.name}
                   onChange={(e) =>
@@ -251,6 +287,7 @@ export function SettingsPanel({
                   }
                 />
                 <input
+                  disabled={busy}
                   aria-label={`Aliases for ${c.name}`}
                   value={c.aliases.join(", ")}
                   placeholder="Aliases, separated by commas"
@@ -276,47 +313,45 @@ export function SettingsPanel({
           <div className="inset">
             <Field label="New client name">
               <input
+                disabled={busy}
                 value={clientName}
                 onChange={(e) => setClientName(e.target.value)}
               />
             </Field>
             <Field label="Aliases">
               <input
+                disabled={busy}
                 value={aliases}
                 onChange={(e) => setAliases(e.target.value)}
               />
             </Field>
             <button
+              type="button"
               className="secondary"
-              disabled={!clientName.trim()}
+              disabled={busy || !clientName.trim()}
               onClick={() => {
-                setClients([
-                  ...clients,
-                  {
-                    id: crypto.randomUUID(),
-                    name: clientName.trim(),
-                    aliases: aliases
-                      .split(",")
-                      .map((s) => s.trim())
-                      .filter(Boolean),
-                  },
-                ]);
+                setClients([...clients, newClient()]);
                 setClientName("");
                 setAliases("");
+                setMessage("");
               }}
             >
               <Plus size={16} />
               Add client
             </button>
+            <p className="micro muted">
+              Adding several? Add client stages another entry; Save directory
+              saves them all.
+            </p>
           </div>
           <button
             className="primary"
             disabled={busy}
-            onClick={() => save({ type: "clients", clients })}
+            type="submit"
           >
             Save directory
           </button>
-        </div>
+        </form>
       )}
       {tab === "priorities" && (
         <div>
