@@ -151,8 +151,9 @@ function itemConflicts(snapshot: ScheduleSnapshot, item: WorkItem): ScheduleConf
   if (!snapshot.clients.some((client) => client.id === item.clientId)) add("unknown_client", `Choose an existing client for “${item.title}”.`);
   if (!item.title.trim()) add("missing_title", "Work needs a title.");
   if (!snapshot.priorities.some((priority) => priority.id === item.priorityId)) add("unknown_priority", `“${item.title}” has an unknown priority.`);
-  if (item.estimatedMinutes === null ? liveItem(item) : !Number.isFinite(item.estimatedMinutes) || item.estimatedMinutes <= 0) add("missing_estimate", `“${item.title}” needs a positive effort estimate before reserving time.`);
-  if (item.remainingMinutes === null ? liveItem(item) : !Number.isFinite(item.remainingMinutes) || item.remainingMinutes < 0) add("invalid_remaining", `“${item.title}” needs a nonnegative remaining-effort estimate before reserving time.`);
+  if (item.estimatedMinutes !== null && (!Number.isFinite(item.estimatedMinutes) || item.estimatedMinutes <= 0)) add("missing_estimate", `“${item.title}” needs a positive effort estimate or an explicitly unknown total.`);
+  if (item.remainingMinutes !== null && (!Number.isFinite(item.remainingMinutes) || item.remainingMinutes < 0)) add("invalid_remaining", `“${item.title}” needs a nonnegative remaining-effort estimate.`);
+  if (liveItem(item) && (item.estimatedMinutes === null) !== (item.remainingMinutes === null)) add("missing_estimate", `“${item.title}” needs consistent total and remaining estimates; unknown totals use explicit sessions only.`);
   if (!Number.isFinite(item.minimumSessionMinutes) || item.minimumSessionMinutes <= 0) add("invalid_focus", `“${item.title}” needs a positive minimum session length.`);
   if (!isDate(item.windowStart) || [item.windowEnd, item.targetDate, item.deadline, item.updateDate, ...item.allowedDates].some((date) => date !== null && !isDate(date))) add("invalid_date", `“${item.title}” has an invalid calendar date.`);
   if (item.deadline && item.deadline < item.windowStart) add("deadline_before_start", `“${item.title}” has a firm deadline before its start date.`);
@@ -199,9 +200,14 @@ export function validateSchedule(snapshot: ScheduleSnapshot, now = new Date().to
       const scheduledMinutes = minutesBetween(session.start, session.end);
       if (minutesBetween(instantFromMs(bounds.start), session.start) % snapshot.settings.slotMinutes !== 0 || scheduledMinutes % snapshot.settings.slotMinutes !== 0) errors.push(conflict("slot_alignment", `“${item.title}” must use ${snapshot.settings.slotMinutes}-minute scheduling increments.`, [item.id]));
       const itemSessions = snapshot.sessions.filter((entry) => entry.workItemId === item.id && isInstant(entry.start) && isInstant(entry.end) && futureMinutes(entry, now) > 0).sort((a, b) => instantMs(a.start) - instantMs(b.start));
-      const minimum = Math.min(item.minimumSessionMinutes, item.remainingMinutes ?? 0);
-      const earlierMinutes = itemSessions.filter((entry) => instantMs(entry.end) <= part.start).reduce((sum, entry) => sum + futureMinutes(entry, now), 0);
-      const smallerRemainder = itemSessions.at(-1)?.id === session.id && earlierMinutes > 0 && (item.remainingMinutes ?? 0) - earlierMinutes <= scheduledMinutes;
+      // For unknown totals, validate each day's explicit booking independently:
+      // a later booking must not invalidate an earlier lunch-split remainder.
+      // This session budget is never stored as an estimate of the project.
+      const focusSessions = item.remainingMinutes === null ? itemSessions.filter(entry => localDate(entry.start, snapshot.settings.timeZone) === date) : itemSessions;
+      const sessionBudget = item.remainingMinutes ?? focusSessions.reduce((sum, entry) => sum + futureMinutes(entry, now), 0);
+      const minimum = Math.min(item.minimumSessionMinutes, sessionBudget);
+      const earlierMinutes = focusSessions.filter((entry) => instantMs(entry.end) <= part.start).reduce((sum, entry) => sum + futureMinutes(entry, now), 0);
+      const smallerRemainder = focusSessions.at(-1)?.id === session.id && earlierMinutes > 0 && sessionBudget - earlierMinutes <= scheduledMinutes;
       if (scheduledMinutes < minimum && !smallerRemainder) errors.push(conflict("focus_length", `“${item.title}” needs a focus session of at least ${minimum} minutes.`, [item.id]));
     }
     if (planned(session) && (date < item.windowStart || (item.allowedDates.length > 0 && !item.allowedDates.includes(date)))) errors.push(conflict("outside_allowed_dates", `“${item.title}” is outside its allowed work dates.`, [item.id]));
@@ -250,6 +256,7 @@ function removeFutureSession(snapshot: ScheduleSnapshot, session: WorkSession, n
 function refreshForecasts(snapshot: ScheduleSnapshot, now: string, affected: Set<string>) {
   for (const item of snapshot.items) {
     if (!affected.has(item.id)) continue;
+    if (item.remainingMinutes === null) { item.forecastDate = null; continue; }
     const dates = snapshot.sessions.filter((session) => session.workItemId === item.id && planned(session) && instantMs(session.end) > instantMs(now)).map((session) => localDate(session.end, snapshot.settings.timeZone));
     item.forecastDate = dates.sort().at(-1) ?? (item.status === "completed" && item.completedAt ? localDate(item.completedAt, snapshot.settings.timeZone) : null);
   }
@@ -280,6 +287,7 @@ function alternatives(snapshot: ScheduleSnapshot, item: WorkItem, now: string): 
 }
 
 function trimExcess(snapshot: ScheduleSnapshot, item: WorkItem, now: string, override: boolean): ScheduleConflict | null {
+  if (item.remainingMinutes === null) return null;
   const reservedEffort = Math.ceil((item.remainingMinutes ?? 0) / snapshot.settings.slotMinutes) * snapshot.settings.slotMinutes;
   let excess = Math.floor((snapshot.sessions.filter((session) => session.workItemId === item.id).reduce((sum, session) => sum + futureMinutes(session, now), 0) - reservedEffort) / snapshot.settings.slotMinutes) * snapshot.settings.slotMinutes;
   const candidates = snapshot.sessions.filter((session) => session.workItemId === item.id && futureMinutes(session, now) > 0).sort((a, b) => instantMs(b.end) - instantMs(a.end));
@@ -329,6 +337,10 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
         const item = clone(command.item);
         if (draft.items.some((existing) => existing.id === item.id)) { errors.push(conflict("duplicate_item", "This work item already exists.", [item.id])); continue; }
         if (actor.role === "requester") {
+          if (item.estimatedMinutes === null || item.estimatedMinutes <= 0) {
+            errors.push(conflict("missing_estimate", "New requests need a positive effort estimate.", [item.id]));
+            continue;
+          }
           item.requestedPriorityId = item.requestedPriorityId ?? item.priorityId;
           item.priorityId = snapshot.priorities.find((priority) => priority.id === "normal")?.id ?? snapshot.priorities.find((priority) => priority.rank === 2)?.id ?? snapshot.priorities.at(-1)?.id ?? "normal";
           item.requesterId = actor.id; item.requestedBy = actor.name;
@@ -336,6 +348,10 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
           item.progressCompleted = 0; item.checklist = item.checklist.map((entry) => ({ ...entry, done: false }));
         }
         item.createdAt = now; item.updatedAt = now; item.forecastDate = null;
+        if (liveItem(item) && item.remainingMinutes === null && !command.sessions?.length) {
+          errors.push(conflict("missing_sessions", "Unknown-total projects need explicit work sessions, or can be saved as waiting work.", [item.id]));
+          continue;
+        }
         draft.items.push(item); scheduleIds.add(item.id);
         if (actor.role === "owner" && (command.urgent || rank(draft, item) === 0)) urgentIds.add(item.id);
         if (command.sessions?.length) {
@@ -381,7 +397,7 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
         session.status = "completed";
         if (instantMs(session.start) >= instantMs(now)) session.usesReserve = false;
         else if (instantMs(session.end) > instantMs(now)) session.end = now;
-        if (command.remainingMinutes !== undefined) item.remainingMinutes = command.remainingMinutes;
+        if (command.remainingMinutes !== undefined) { item.remainingMinutes = command.remainingMinutes; initializeEstimate(item, command.remainingMinutes); }
         item.updatedAt = now;
         scheduleIds.add(item.id);
         summaries.push(`Completed a work session for ${item.title}; ${command.remainingMinutes === undefined ? "the project’s remaining-effort estimate is unchanged" : `remaining effort is ${command.remainingMinutes} minutes`}.`);
@@ -408,6 +424,12 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
         if (command.checklist !== undefined) item.checklist = clone(command.checklist);
         item.updatedAt = now; summaries.push(`Updated progress on ${item.title}.`);
       } else if (command.type === "status") {
+        if (["planned", "in_progress"].includes(command.status) && item.remainingMinutes === null && command.remainingMinutes === undefined
+          && !draft.sessions.some(session => session.workItemId === item.id && futureMinutes(session, now) > 0)
+          && !commands.some(next => next.type === "schedule" && next.itemId === item.id && next.sessions?.length)) {
+          errors.push(conflict("missing_estimate", "Resume this work with an estimate or explicitly dated work sessions.", [item.id]));
+          continue;
+        }
         if (command.remainingMinutes !== undefined) {
           if (!Number.isFinite(command.remainingMinutes) || command.remainingMinutes < 0) {
             errors.push(conflict("invalid_remaining", "Remaining effort must be a nonnegative number.", [item.id]));
@@ -422,6 +444,10 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
         else item.completedAt = null;
         scheduleIds.add(item.id); summaries.push(`${command.status === "completed" ? "Completed" : "Changed status of"} ${item.title}${command.status === "completed" ? "." : ` to ${command.status}.`}`);
       } else if (command.type === "schedule") {
+        if (item.remainingMinutes === null && !command.sessions?.length) {
+          errors.push(conflict("missing_sessions", "The project total is unknown. Give the date, start and end for the session to book.", [item.id]));
+          continue;
+        }
         scheduleIds.add(item.id);
         if (command.urgent || rank(draft, item) === 0) urgentIds.add(item.id);
         if (command.sessions) {
@@ -429,9 +455,22 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
             errors.push(conflict("invalid_session", "Replacement sessions must belong to this work item and be planned.", [item.id]));
             continue;
           }
-          const cancellation = cancelFuture(draft, item.id, now, !!command.overrideProtected);
-          if (cancellation) errors.push(cancellation);
-          else { draft.sessions.push(...clone(command.sessions)); explicitIds.add(item.id); }
+          if (item.remainingMinutes === null) {
+            // Appending explicit bookings must leave identical old sessions in
+            // place, including protected sessions and a session already underway.
+            const unchanged = new Set(draft.sessions.filter(old => command.sessions!.some(next => JSON.stringify(next) === JSON.stringify(old))).map(session => session.id));
+            const replaced = draft.sessions.filter(session => session.workItemId === item.id && futureMinutes(session, now) > 0 && !unchanged.has(session.id));
+            if (!command.overrideProtected && replaced.some(session => session.protected)) errors.push(conflict("protected_session", "This change would remove protected work time. Bryan must explicitly override it.", [item.id]));
+            else {
+              for (const session of replaced) removeFutureSession(draft, session, now);
+              draft.sessions.push(...clone(command.sessions.filter(session => !unchanged.has(session.id))));
+              explicitIds.add(item.id);
+            }
+          } else {
+            const cancellation = cancelFuture(draft, item.id, now, !!command.overrideProtected);
+            if (cancellation) errors.push(cancellation);
+            else { draft.sessions.push(...clone(command.sessions)); explicitIds.add(item.id); }
+          }
         } else if (urgentIds.has(item.id)) {
           const ownSessions = draft.sessions.filter((session) => session.workItemId === item.id && planned(session) && instantMs(session.end) > instantMs(now));
           if (!command.overrideProtected && ownSessions.some((session) => session.protected)) errors.push(conflict("protected_session", "Moving this work earlier would change protected time; explicitly override it.", [item.id]));
@@ -621,6 +660,18 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
       if (planned(session) && (!original || original.start !== session.start) && instantMs(session.start) < instantMs(now)) validation.push(conflict("past_session", "A new work session cannot be scheduled in the past.", [session.workItemId]));
     }
     if (validation.length) return fail(validation, requester ? "approval_required" : "infeasible");
+    // Unknown remaining effort cannot reconstruct displaced reservations. Never
+    // silently drop them during automatic replanning; ask for an explicit move.
+    for (const item of snapshot.items.filter(entry => entry.remainingMinutes === null && liveItem(entry))) {
+      const lost = snapshot.sessions.some(old => old.workItemId === item.id && futureMinutes(old, now) > 0
+        && !draft.sessions.some(next => next.id === old.id && next.start === old.start && next.end === old.end && next.status === old.status)
+        && !commands.some(command =>
+          (command.type === "schedule" && command.itemId === item.id && command.sessions !== undefined)
+          || (command.type === "status" && command.itemId === item.id && ["waiting", "completed", "cancelled"].includes(command.status))
+          || ((command.type === "move" || command.type === "complete_session") && command.sessionId === old.id)
+          || ((command.type === "progress" || command.type === "update") && command.itemId === item.id && (command.type === "progress" ? command.remainingMinutes !== undefined : command.patch.remainingMinutes !== undefined && command.patch.remainingMinutes !== null))));
+      if (lost) return fail([conflict("unknown_effort_displacement", `“${item.title}” has an unknown total. Move its booked sessions explicitly before changing time they occupy.`, [item.id])], requester ? "approval_required" : "infeasible");
+    }
     refreshForecasts(draft, now, new Set([...scheduleIds, ...displacedIds]));
     const affected = new Set(changes(snapshot, draft));
     for (const command of commands) if (command.type === "client_update") affected.add(command.itemId);

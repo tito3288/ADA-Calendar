@@ -50,8 +50,20 @@ function acceptsPendingBacklog(text: string, continuation: AssistantContinuation
   });
 }
 
+function refersToPendingWork(text: string) {
+  const reply = text.trim();
+  // "Add it for September ..." answers the pending question. Unlike a named
+  // add command, the pronoun does not introduce a new work item. This only
+  // retains conversation context; the compiler still validates every change.
+  if (!/^(?:please\s+)?(?:add|create|book)\s+(?:it|this|that)(?=$|[.!?,]|\s+(?:for|on|from|starting|during|through|until|with|as|now|today|tomorrow|this|next|in|at)\b)/i.test(reply)) return false;
+  if (/\b(?:new|another|separate|different|second|additional)\s+(?:(?:software|web|it|landings?)\s+)?(?:task|project|work(?:\s+item)?)\b/i.test(reply)) return false;
+  // Do not attach a second named command to the pending instruction merely
+  // because the reply starts with a pronoun referring to the first one.
+  return !/(?:[.;]\s*|\b(?:and|also|then|plus)\s+)(?:please\s+)?(?:add|create|book|schedule)\s+(?!it\b|this\b|that\b|the\s+(?:same\s+)?(?:task|work)\b)/i.test(reply);
+}
+
 export function conversationText(text: string, continuation?: AssistantContinuation) {
-  if (continuation && /^(?:(?:instead|actually|also|separately)[,\s]+)?(?:please\s+)?(?:add|create|book|schedule(?!\s+(?:it|that|this|the (?:same )?(?:task|work))\b))\b|^(?:never\s*mind|forget (?:that|it)|cancel that)[,;.]+/i.test(text.trim()) && !acceptsPendingBacklog(text, continuation))
+  if (continuation && /^(?:(?:instead|actually|also|separately)[,\s]+)?(?:please\s+)?(?:add|create|book|schedule(?!\s+(?:it|that|this|the (?:same )?(?:task|work))\b))\b|^(?:never\s*mind|forget (?:that|it)|cancel that)[,;.]+/i.test(text.trim()) && !acceptsPendingBacklog(text, continuation) && !refersToPendingWork(text))
     throw new Error("That looks like a new task. Use Start a new instruction before sending it; the pending work has not been changed.");
   const combined = [...(continuation?.turns.map(turn => turn.userText) ?? []), text].join("\n");
   if (combined.length > MAX_ASSISTANT_INPUT || (continuation?.turns.length ?? 0) >= MAX_CLARIFICATION_TURNS)

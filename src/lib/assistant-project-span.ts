@@ -16,9 +16,16 @@ const months = [
 ];
 const monthPattern = months.join("|");
 const referencePattern = `(?:this\\s+month|next\\s+month|${monthPattern})`;
+const datedReferencePattern = `${referencePattern}(?:\\s+\\d{4}\\b)?`;
+const restPattern = `(?:(?:the\\s+)?rest\\s+of\\s+(?:the\\s+)?)?`;
+const yearEndPattern = `(?:(?:the\\s+)?end\\s+of\\s+(?:(?:the|this)\\s+)?year|year[- ]end)`;
+const yearEndExpression = new RegExp(
+  `\\b(?:${restPattern}${datedReferencePattern}\\s+(?:and\\s+)?(?:through|to|until)\\s+${yearEndPattern}|(?:through|to|until)\\s+${yearEndPattern})\\b`,
+  "g",
+);
 const monthExpression = new RegExp(
-  `\\b(?:(?:the\\s+)?rest\\s+of\\s+(?:the\\s+)?)?${referencePattern}` +
-    `(?:\\s+\\d{4}\\b)?(?:\\s+(?:and|through|to)\\s+${referencePattern}(?:\\s+\\d{4}\\b)?)?\\b`,
+  `\\b${restPattern}${datedReferencePattern}` +
+    `(?:(?:\\s*,\\s*(?:and\\s+)?|\\s+(?:and|through|to|until)\\s+)${datedReferencePattern}){0,11}\\b`,
   "g",
 );
 const monthReference = new RegExp(
@@ -50,8 +57,13 @@ export function projectMonthSpan(
   if (/\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/.test(input)) return null;
 
   const references = [...input.matchAll(monthReference)];
-  const expressions = [...input.matchAll(monthExpression)];
-  if (!references.length || references.length > 2 || expressions.length !== 1)
+  const yearEnds = [...input.matchAll(yearEndExpression)];
+  const expressions = yearEnds.length ? yearEnds : [...input.matchAll(monthExpression)];
+  if (
+    (!references.length && !yearEnds.length) ||
+    references.length > 12 ||
+    expressions.length !== 1
+  )
     return null;
   const expression = expressions[0];
   const expressionReferences = [...expression[0].matchAll(monthReference)];
@@ -122,7 +134,27 @@ export function projectMonthSpan(
   let first: Temporal.PlainDate;
   let last: Temporal.PlainDate;
   try {
-    if (relative.every(Boolean)) {
+    if (yearEnds.length) {
+      // A year-end phrase always means the current workspace year. It cannot
+      // silently combine another month expression or a conflicting explicit year.
+      if (references.length > 1) return null;
+      const ref = references[0];
+      if (ref?.[2] && Number(ref[2]) !== current.year) return null;
+      first = !ref
+        ? current
+        : ref[1] === "this month"
+          ? current.with({ day: 1 })
+          : ref[1] === "next month"
+            ? current.with({ day: 1 }).add({ months: 1 })
+            : Temporal.PlainDate.from({
+                year: current.year,
+                month: months.indexOf(ref[1]) + 1,
+                day: 1,
+              });
+      if (first.year !== current.year) return null;
+      last = current.with({ month: 12, day: 1 });
+    } else if (relative.every(Boolean)) {
+      if (references.length > 2) return null;
       if (references.some((ref) => ref[2])) return null;
       const month = current.with({ day: 1 });
       first =
@@ -142,34 +174,44 @@ export function projectMonthSpan(
       )
         return null;
       const firstMonth = months.indexOf(references[0][1]) + 1;
-      const lastMonth = months.indexOf(references.at(-1)![1]) + 1;
-      const firstExplicitYear = references[0][2]
-        ? Number(references[0][2])
-        : undefined;
-      const lastExplicitYear = references.at(-1)![2]
-        ? Number(references.at(-1)![2])
-        : undefined;
-      const rollover =
-        references.length === 2 && lastMonth < firstMonth ? 1 : 0;
-      const firstYear =
-        firstExplicitYear ??
-        (lastExplicitYear !== undefined
-          ? lastExplicitYear - rollover
-          : current.year);
-      const lastYear = lastExplicitYear ?? firstYear + rollover;
-      if (firstYear < 1 || lastYear < 1 || firstYear > 9999 || lastYear > 9999)
-        return null;
+      const isRange = /\b(?:through|to|until)\b/.test(expression[0]);
+      if (isRange && references.length !== 2) return null;
+      // A backwards range is ambiguous without both years, except the familiar
+      // December–January rollover already supported by the calendar.
+      if (isRange && months.indexOf(references[1][1]) < firstMonth - 1
+        && !(firstMonth === 12 && references[1][1] === "january")
+        && !references.every(ref => ref[2])) return null;
+      const offsets = [0];
+      for (let index = 1; index < references.length; index++) {
+        const previousMonth = months.indexOf(references[index - 1][1]) + 1;
+        const nextMonth = months.indexOf(references[index][1]) + 1;
+        const difference = (nextMonth - previousMonth + 12) % 12;
+        if (!difference || (!isRange && difference !== 1)) return null;
+        offsets.push(offsets[index - 1] + difference);
+      }
+      // Twelve months inclusive is the maximum display range, including rollover.
+      if (offsets.at(-1)! > 11) return null;
+      const baseYears = references.flatMap((ref, index) =>
+        ref[2]
+          ? [Number(ref[2]) - Math.floor((firstMonth - 1 + offsets[index]) / 12)]
+          : [],
+      );
+      if (new Set(baseYears).size > 1) return null;
+      const firstYear = baseYears[0] ?? current.year;
+      if (firstYear < 1 || firstYear > 9999) return null;
       first = Temporal.PlainDate.from(
         { year: firstYear, month: firstMonth, day: 1 },
         { overflow: "reject" },
       );
-      last = Temporal.PlainDate.from(
-        { year: lastYear, month: lastMonth, day: 1 },
-        { overflow: "reject" },
-      );
+      last = first.add({ months: offsets.at(-1)! });
     }
     if (first.year > 9999 || last.year > 9999) return null;
-    if (references.length === 2 && !first.add({ months: 1 }).equals(last))
+    if (
+      !yearEnds.length &&
+      relative.every(Boolean) &&
+      references.length === 2 &&
+      !first.add({ months: 1 }).equals(last)
+    )
       return null;
     const end = last.with({ day: last.daysInMonth });
     if (

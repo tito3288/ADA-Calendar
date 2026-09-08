@@ -23,11 +23,11 @@ export function separateWorkRequested(text: string): boolean {
 
 /** An incidental month on an invoice or in a quoted note is not a project span. */
 export function projectMonthEvidence(text: string): string | null {
-  const months = /\b(?:this month|next month|january|february|march|april|may|june|july|august|september|october|november|december)\b/i;
-  const span = /\b(?:project\s+(?:context|span|timeline)|span|timeline|rest\s+of|throughout|ongoing)\b|\b(?:work(?:ing)?|project)\b[^.!?\n]{0,60}\b(?:runs?|spans?|continues?|through|during|for)\b/i;
+  const months = /\b(?:this month|next month|january|february|march|april|may|june|july|august|september|october|november|december|end of (?:the |this )?year|year[- ]end)\b/i;
+  const span = /\b(?:project\s+(?:context|span|timeline)|span|timeline|rest\s+of|throughout|ongoing|months of|end of (?:the |this )?year|year[- ]end)\b|\b(?:work(?:ing)?|project|add it|keep it|show it)\b[^.!?\n]{0,60}\b(?:runs?|spans?|continues?|through|during|for)\b/i;
   // Bind months to the same statement as the project span. An unrelated invoice
   // month elsewhere in the description must not become a calendar endpoint.
-  const statements = text.split(/[.!?\n;]+/).filter(statement => months.test(statement) && span.test(statement));
+  const statements = text.split(/[.!?\n;]+|\b(?:and |but )?for now\b|\bwith \d+ hours? (?:of )?work\b/i).filter(statement => months.test(statement) && span.test(statement));
   return statements.length ? statements.join(". ") : null;
 }
 

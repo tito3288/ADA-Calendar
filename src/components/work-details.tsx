@@ -456,7 +456,10 @@ export function WorkDetails({
             No executable sessions. The project remains visible on your plate.
           </p>
         )}
-        {owner && item.status !== "waiting" && item.status !== "completed" && (
+        {owner && item.remainingMinutes === null && item.status !== "completed" && item.status !== "cancelled" && (
+          <p className="micro muted">To book more time, use Ask ADA with this task’s name and the session date and times. The project total can stay unknown.</p>
+        )}
+        {owner && item.remainingMinutes !== null && item.status !== "waiting" && item.status !== "completed" && (
           <button
             className="text-button"
             onClick={() => command({ type: "schedule", itemId: item.id })}

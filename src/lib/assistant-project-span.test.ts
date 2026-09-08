@@ -54,6 +54,16 @@ describe("whole-month project display spans", () => {
     ["rest of February 2028", "2028-02-11", "2028-02-11", "2028-02-29"],
     ["February 2027", "2027-01-01", "2027-02-01", "2027-02-28"],
     ["Project spans September", "2026-08-20", "2026-09-01", "2026-09-30"],
+    ["September through November 2026", "2026-09-08", "2026-09-01", "2026-11-30"],
+    ["September and October and November 2026", "2026-09-08", "2026-09-01", "2026-11-30"],
+    ["September, October, November and December 2026", "2026-09-08", "2026-09-01", "2026-12-31"],
+    ["rest of September through December 2026", "2026-09-08", "2026-09-08", "2026-12-31"],
+    ["rest of this month until the end of the year", "2026-09-08", "2026-09-08", "2026-12-31"],
+    ["this month and until the end of the year", "2026-09-08", "2026-09-01", "2026-12-31"],
+    ["this month through year end", "2026-09-08", "2026-09-01", "2026-12-31"],
+    ["through the end of this year", "2026-09-08", "2026-09-08", "2026-12-31"],
+    ["next month through year end", "2026-09-08", "2026-10-01", "2026-12-31"],
+    ["November, December and January 2027", "2026-09-08", "2026-11-01", "2027-01-31"],
     ["rest of October", "2026-09-08", "2026-10-01", "2026-10-31"],
     [
       "Project for SEPTEMBER THROUGH OCTOBER 2026, awaiting a brief.",
@@ -70,11 +80,12 @@ describe("whole-month project display spans", () => {
   it.each([
     "",
     "Awaiting a brief; no dates yet.",
-    "September through November 2026",
     "September and September 2026",
     "October through September 2026",
     "September 2026 through October 2027",
-    "September and October and November 2026",
+    "September, November and December 2026",
+    "September through December through January 2027",
+    "September 2027 through the end of this year",
     "September or October 2026",
     "September / October 2026",
     "September through early October 2026",
@@ -130,5 +141,9 @@ describe("whole-month project display spans", () => {
 
   it("declines a relative month beyond the supported four-digit year", () => {
     expect(projectMonthSpan("next month", "9999-12-08")).toBeNull();
+  });
+
+  it("does not put next January before the current December year end", () => {
+    expect(projectMonthSpan("next month through year end", "2026-12-08")).toBeNull();
   });
 });

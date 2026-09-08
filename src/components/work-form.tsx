@@ -146,7 +146,7 @@ export function WorkForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [operationId, setOperationId] = useState(() => crypto.randomUUID());
-  const allowUnknownEffort = existing?.status === "waiting" && existing.remainingMinutes === null;
+  const allowUnknownEffort = existing?.remainingMinutes === null;
   function patch(p: Partial<WorkItem>) {
     setItem({ ...item, ...p });
     setProposal(null);
@@ -339,7 +339,9 @@ export function WorkForm({
             existing ? "Remaining effort (hours)" : "Estimated effort (hours)"
           }
           hint={allowUnknownEffort
-            ? "Leave blank while the effort is unknown. Saving hours does not resume waiting work."
+            ? existing?.status === "waiting"
+              ? "Leave blank while the effort is unknown. Saving hours does not resume waiting work."
+              : "Leave blank while the total is unknown. Only your explicitly booked sessions reserve time."
             : "Work time, not the number of days it spans."}
         >
           <input

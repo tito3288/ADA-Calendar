@@ -34,6 +34,35 @@ describe("private pending instruction context", () => {
     expect(() => conversationText("Instead, add web work for Higher Ground Tree: Change logo, 2 hours on 2026-09-10", pending)).toThrow(/new task/);
     expect(() => conversationText("Instead, schedule web work for Higher Ground Tree: Change logo, 2 hours on 2026-09-10", pending)).toThrow(/new task/);
   });
+  it.each([
+    "Add it for months of September, October, November and December and for now we are adding 4 hours of work this Friday the 11th from 9am - 1pm",
+    "Add this for the rest of this month through the end of the year.",
+    "Add that on September 11th from 9am to 1pm.",
+    "Please book it for Friday from 9am to 1pm.",
+    "Create it as unscheduled work with no estimate.",
+    "Add it.",
+  ])("accepts a pronoun reply about the pending work: %s", reply => {
+    const original = "Cedar Lane Books needs a store rebuild. The total effort is unknown; reserve four hours on Friday the 10th.";
+    const dateQuestion = { ...question, message: "Do you mean Thursday the 10th or Friday the 11th?" };
+    const pending = nextContinuation(original, dateQuestion, now)!;
+    expect(conversationText(reply, pending)).toBe(`${original}\n${reply}`);
+    expect(conversationText(reply, pending)).not.toContain(dateQuestion.message);
+  });
+  it.each([
+    "Add store edits for Maple Grove Co, two hours tomorrow",
+    "Add this new project for Maple Grove Co",
+    "Add this store project for Maple Grove Co",
+    "Add it as a separate task for Maple Grove Co",
+    "Also add it for Friday",
+    "Instead, add that for Friday",
+    "Separately book it for Friday",
+    "Add it on Friday; add logo edits for Maple Grove Co, two hours tomorrow",
+    "Add it on Friday and book website edits for Maple Grove Co, two hours tomorrow",
+    "Add it on Friday. Please create a landing page for Maple Grove Co",
+  ])("keeps named work and topic switches out of pronoun replies: %s", reply => {
+    const pending = nextContinuation("Cedar Lane Books needs a store rebuild.", question, now)!;
+    expect(() => conversationText(reply, pending)).toThrow(/new task/);
+  });
   it("accepts the same named pending task as unscheduled work without an estimate", () => {
     const original = "For the rest of this month and next month I will be working on software for Drive and Shine. I am working on Oil Survey system that connects to their POS. I am waiting on details from their end to specify the days and hours.";
     const offer = { ...question, message: "Should I add Oil Survey system now as unscheduled work with no estimate?" };
