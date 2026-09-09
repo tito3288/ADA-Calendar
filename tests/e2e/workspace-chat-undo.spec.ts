@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { AppState } from "../../src/lib/types";
+import { addDays, localDateTime } from "../../src/lib/time";
 import { asActor, commit, exactSession, futureDate, makeItem, origin, preview, state } from "./helpers";
 
 // Real browser → demo chat → scheduler → captured commit/undo. Fixtures stay in
@@ -22,10 +23,19 @@ async function open(page: Page) {
 }
 
 async function seed(page: Page, offset: number, partial = false) {
-  const snapshot = await state(page.request), date = futureDate(snapshot, offset);
+  const snapshot = await state(page.request);
+  // The full browser suite shares only its isolated demo workspace. Choose a
+  // clear fixture morning rather than colliding with an earlier meeting test.
+  const occupied = [...snapshot.sessions.filter(session => session.status === "planned"), ...snapshot.blocks];
+  const date = Array.from({ length: 366 }, (_, index) => futureDate(snapshot, offset + index)).find(candidate => {
+    const start = Date.parse(localDateTime(candidate, "09:00", snapshot.settings.timeZone));
+    const end = Date.parse(localDateTime(candidate, "11:00", snapshot.settings.timeZone));
+    return !occupied.some(entry => Date.parse(entry.start) < end && Date.parse(entry.end) > start);
+  });
+  if (!date) throw new Error("No clear fixture morning available in the isolated demo calendar.");
   const title = `Fictional undo Cedar ${offset}`;
   const item = makeItem(snapshot, title, {
-    windowStart: date, windowEnd: futureDate(snapshot, offset + 10),
+    windowStart: date, windowEnd: addDays(date, 10),
     estimatedMinutes: 120, remainingMinutes: 120, minimumSessionMinutes: 120,
     category: "web", webKind: "build",
   });

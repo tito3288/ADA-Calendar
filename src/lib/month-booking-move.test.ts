@@ -17,8 +17,8 @@ const command=(ids=["first","second"],date=destination):Extract<WorkCommand,{typ
 const plan=(state:ScheduleSnapshot,cmd:WorkCommand=command(),actor=owner,clock=now)=>planCommands(state,[cmd],actor,{now:clock,operationId:"month-move-op"});
 function ready(state:ScheduleSnapshot,result:ReturnType<typeof plan>){
   expect(result.status,JSON.stringify(result.conflicts)).toBe("ready");expect(validateSchedule({...state,...result},now)).toEqual([]);
-  expect(result.sessions.map(s=>s.id)).toEqual(state.sessions.map(s=>s.id));
-  expect(result.sessions.map(s=>minutesBetween(s.start,s.end))).toEqual(state.sessions.map(s=>minutesBetween(s.start,s.end)));
+  expect(result.sessions.map(s=>s.id)).toEqual(expect.arrayContaining(state.sessions.map(s=>s.id)));
+  expect(result.sessions.reduce((sum,s)=>sum+minutesBetween(s.start,s.end),0)).toEqual(state.sessions.reduce((sum,s)=>sum+minutesBetween(s.start,s.end),0));
   expect(result.items[0]).toMatchObject({estimatedMinutes:state.items[0].estimatedMinutes,remainingMinutes:state.items[0].remainingMinutes,windowStart:state.items[0].windowStart,windowEnd:state.items[0].windowEnd,deadline:state.items[0].deadline,allowedDates:state.items[0].allowedDates,minimumSessionMinutes:state.items[0].minimumSessionMinutes,description:state.items[0].description,references:state.items[0].references});
   expect(result.blocks).toEqual(state.blocks);
 }
@@ -39,24 +39,26 @@ describe("atomic month-segment booking moves",()=>{
     const result=plan(state,command(["first"])),single=plan(state,{type:"move_booking",sessionId:"first",date:destination});ready(state,result);
     expect(result.sessions).toEqual(single.sessions);expect(result.items).toEqual(single.items);
   });
-  it("uses separate openings around lunch only for already-separate sessions",()=>{
+  it("splits a booked day around lunch even when its source was one session",()=>{
     const state=snapshot();state.blocks=[{id:"morning",title:"Morning meeting",kind:"meeting",start:at("09:00",destination),end:at("11:00",destination)}];
     const result=plan(state);ready(state,result);
     expect(result.sessions.map(s=>[s.start,s.end])).toEqual([[at("11:00",destination),at("12:00",destination)],[at("12:30",destination),at("13:30",destination)]]);
     state.sessions=[booking("first","09:00","11:00")];state.blocks.push({id:"afternoon",title:"Afternoon meeting",kind:"meeting",start:at("13:30",destination),end:at("17:00",destination)});
-    failed(state,plan(state,command(["first"])),"booking_capacity");
+    const split=plan(state,command(["first"]));ready(state,split);
+    expect(split.sessions.map(s=>[s.start,s.end])).toEqual([[at("11:00",destination),at("12:00",destination)],[at("12:30",destination),at("13:30",destination)]]);
   });
-  it("does not let a short booking consume the only opening that fits a long booking",()=>{
+  it("preserves order while splitting a longer booking between remaining gaps",()=>{
     const state=snapshot();state.sessions=[booking("short","09:00","10:00"),booking("long","10:00","12:00")];
     state.blocks=[{id:"late-am",title:"Meeting",kind:"meeting",start:at("11:00",destination),end:at("12:00",destination)},{id:"afternoon",title:"Meeting",kind:"meeting",start:at("13:30",destination),end:at("17:00",destination)}];
     const result=plan(state,command(["short","long"]));ready(state,result);
-    expect(result.sessions[0].start).toBe(at("12:30",destination));expect(result.sessions[1].start).toBe(at("09:00",destination));
+    expect(result.sessions.map(s=>[s.start,s.end])).toEqual([[at("09:00",destination),at("10:00",destination)],[at("10:00",destination),at("11:00",destination)],[at("12:30",destination),at("13:30",destination)]]);
   });
-  it("backtracks when even longest-first greedy placement would falsely reject a fragmented fit",()=>{
+  it("fills fragmented gaps in original order with stable fragment IDs",()=>{
     const state=snapshot({minimumSessionMinutes:15});state.sessions=[booking("75","09:00","10:15"),booking("60","10:15","11:15"),booking("30","11:15","11:45")];
     state.blocks=[{id:"late-am",title:"Meeting",kind:"meeting",start:at("10:30",destination),end:at("12:00",destination)},{id:"afternoon",title:"Meeting",kind:"meeting",start:at("13:45",destination),end:at("17:00",destination)}];
     const result=plan(state,command(["75","60","30"]));ready(state,result);
-    expect(result.sessions.map(s=>[s.id,s.start,s.end])).toEqual([["75",at("12:30",destination),at("13:45",destination)],["60",at("09:00",destination),at("10:00",destination)],["30",at("10:00",destination),at("10:30",destination)]]);
+    expect(result.sessions.slice(0,3).map(s=>[s.id,s.start,s.end])).toEqual([["75",at("09:00",destination),at("10:15",destination)],["60",at("10:15",destination),at("10:30",destination)],["30",at("13:15",destination),at("13:45",destination)]]);
+    expect(result.sessions[3]).toMatchObject({start:at("12:30",destination),end:at("13:15",destination)});
     expect(plan(state,command(["30","75","60"])).sessions).toEqual(result.sessions);
   });
   it("returns the complete original snapshot if only some bookings could fit",()=>{
@@ -92,8 +94,8 @@ describe("atomic month-segment booking moves",()=>{
     const state=snapshot({status});failed(state,plan(state),status==="waiting"?"booking_waiting":"inactive_work");
   });
   it("checks earliest start, allowed dates and firm deadline without altering the display span",()=>{
-    for(const patch of [{allowedDates:[source]},{deadline:source}]){const state=snapshot(patch);failed(state,plan(state),"outside_allowed_dates");}
-    const state=snapshot({windowStart:destination});state.sessions=state.sessions.map(s=>({...s,start:at("09:00","2026-09-11"),end:at("10:00","2026-09-11")}));
+    for(const patch of [{dateConstraints:{earliestStart:null,allowedDates:[source]}},{deadline:source}]){const state=snapshot(patch);failed(state,plan(state),"outside_allowed_dates");}
+    const state=snapshot({dateConstraints:{earliestStart:destination,allowedDates:[]}});state.sessions=state.sessions.map(s=>({...s,start:at("09:00","2026-09-11"),end:at("10:00","2026-09-11")}));
     failed(state,plan(state,command(undefined,source)),"outside_allowed_dates");
     const flexible=snapshot({windowEnd:source});const result=plan(flexible);ready(flexible,result);expect(result.items[0].windowEnd).toBe(source);
   });

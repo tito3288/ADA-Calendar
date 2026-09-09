@@ -72,7 +72,7 @@ export function draftSession(
     protected: row.protected,
     status: "planned",
     usesReserve: row.usesReserve,
-    ...(row.focusOverrideMinutes !== undefined ? { focusOverrideMinutes: Math.min(row.focusOverrideMinutes, minutes) } : {}),
+    ...(row.focusOverrideMinutes !== undefined ? { focusOverrideMinutes: row.focusOverrideMinutes } : {}),
   };
 }
 
@@ -94,12 +94,9 @@ export function splitSessionDraft(
     },
     zone,
   ).end;
-  return [
-    { ...row, end: middle },
-    { ...row, id: secondId, start: middle },
-  ].map(part => row.focusOverrideMinutes === undefined ? part : { ...part,
-    focusOverrideMinutes: Math.min(row.focusOverrideMinutes, minutesBetween(localDateTime(part.date, part.start, zone), localDateTime(part.date, part.end, zone))),
-  });
+  const second = { ...row, id: secondId, start: middle };
+  delete second.focusOverrideMinutes;
+  return [{ ...row, end: middle }, second];
 }
 
 /** Replacement reservations and an optional explicit effort edit are one atomic proposal. */
@@ -129,26 +126,11 @@ export function sessionManagementCommands({
   const planned = original.filter(
     (session) => session.workItemId === item.id && session.status === "planned",
   );
-  if (
-    planned.some(
-      (session) =>
-        instantMs(session.start) < instantMs(now) &&
-        instantMs(session.end) > instantMs(now),
-    )
-  ) {
-    throw new Error(
-      "A session is currently underway. Manage this project’s sessions after it ends so its remaining time stays exact.",
-    );
-  }
   const sessions = rows.map((row) => {
     const old = planned.find((session) => session.id === row.id);
     if (old && JSON.stringify(sessionDraft(old, zone)) === JSON.stringify(row))
       return { ...old };
-    const session = draftSession(row, item.id, zone);
-    const duration = minutesBetween(session.start, session.end);
-    if (duration < item.minimumSessionMinutes)
-      session.focusOverrideMinutes = Math.min(session.focusOverrideMinutes ?? duration, duration);
-    return session;
+    return draftSession(row, item.id, zone);
   });
   if (new Set(sessions.map((session) => session.id)).size !== sessions.length)
     throw new Error("Each session must have its own row.");

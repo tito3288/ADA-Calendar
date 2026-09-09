@@ -68,6 +68,22 @@ async function persist(state: AppState, proposal: ScheduleProposal, options: { r
   return getLiveState(state.actor.id);
 }
 
+/** An exact authenticated ledger lookup; getLiveState intentionally shows only recent events. */
+export async function hasCommittedLiveOperation(actor: Actor, operationId: string, commands: ScheduleProposal["commands"]): Promise<boolean> {
+  const trusted = await assertLiveActor(actor);
+  const db = await getSupabaseServerClient();
+  const membership = await db.from("workspace_members").select("workspace_id").eq("user_id", trusted.id).eq("active", true).maybeSingle();
+  check(membership.error, "Read workspace membership");
+  if (!membership.data?.workspace_id) throw new Error("Your workspace is no longer available. Sign in again.");
+  const previous = await db.from("work_events").select("actor_id,operation_payload")
+    .eq("workspace_id", membership.data.workspace_id).eq("operation_id", operationId).maybeSingle();
+  check(previous.error, "Check committed operation");
+  if (!previous.data) return false;
+  if (previous.data.actor_id !== trusted.id || canonical(previous.data.operation_payload) !== canonical(commands))
+    throw new Error("That operation id does not match this account and its saved commands. Its saved work was not repeated.");
+  return true;
+}
+
 export async function commitLiveProposal(actor: Actor, proposal: ScheduleProposal): Promise<AppState> {
   const trusted = await assertLiveActor(actor);
   const state = await getLiveState(trusted.id);

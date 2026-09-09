@@ -1,4 +1,5 @@
 "use client";
+import { workTimeline } from "@/lib/work-timeline";
 import { useEffect, useState } from "react";
 import {
   Check,
@@ -293,12 +294,12 @@ export function WorkDetails({
           <span>Remaining effort</span>
           <strong>
             {item.remainingMinutes === null
-              ? "Not estimated"
+              ? "Hours added as needed"
               : formatHours(item.remainingMinutes)}
           </strong>
         </div>
         <div>
-          <span>Reserved time</span>
+          <span>Booked hours</span>
           <strong>{formatHours(planned)}</strong>
         </div>
         <div>
@@ -310,27 +311,25 @@ export function WorkDetails({
       </div>
       <dl className="detail-dates">
         <div>
-          <dt>Project span</dt>
-          <dd>
-            {dateLabel(item.windowStart)} →{" "}
-            {item.windowEnd ? dateLabel(item.windowEnd) : "Open"}
-          </dd>
+          <dt>{workTimeline(item, state.sessions, state.settings.timeZone)?.mode === "span" ? "Project span" : "Booked days"}</dt>
+          <dd>{(() => { const timeline = workTimeline(item, state.sessions, state.settings.timeZone); return timeline ? `${dateLabel(timeline.start)} → ${timeline.end ? dateLabel(timeline.end) : "Until completed or cancelled"}` : "No hours booked"; })()}</dd>
         </div>
         <div>
           <dt>Predicted finish</dt>
           <dd>
             {item.forecastDate
               ? dateLabel(item.forecastDate)
-              : "Not fully scheduled"}
+              : item.remainingMinutes === null ? "Hours added as needed" : "Not fully scheduled"}
           </dd>
         </div>
         <div>
           <dt>Firm deadline</dt>
           <dd>{item.deadline ? dateLabel(item.deadline) : "None"}</dd>
         </div>
-        {item.allowedDates.length > 0 && <div>
+        {item.dateConstraints?.earliestStart && <div><dt>Cannot start before</dt><dd>{dateLabel(item.dateConstraints.earliestStart)}</dd></div>}
+        {(item.dateConstraints?.allowedDates.length ?? 0) > 0 && <div>
           <dt>Allowed work dates</dt>
-          <dd>{[...item.allowedDates].sort().map(date => dateLabel(date)).join(", ")}</dd>
+          <dd>{[...(item.dateConstraints?.allowedDates ?? [])].sort().map(date => dateLabel(date)).join(", ")}</dd>
         </div>}
         {item.updateDate && (
           <div>
@@ -357,10 +356,11 @@ export function WorkDetails({
         <div className="detail-actions">
           <button className="secondary" onClick={onEdit}>
             <Pencil size={14} />
-            Edit work
+            Edit details
           </button>
+          {item.status !== "completed" && item.status !== "cancelled" && <button className="secondary" onClick={() => manage("smart")}><Clock3 size={14} /> Add hours</button>}
           {item.status !== "completed" && item.status !== "cancelled" && <button className="secondary" onClick={() => manage("exact")}>
-            <Clock3 size={14} /> Edit hours and days
+            <Clock3 size={14} /> Edit hours
           </button>}
           {item.status !== "completed" && item.status !== "cancelled" && (
             <button
@@ -386,17 +386,6 @@ export function WorkDetails({
           <Clock3 size={16} />
           Work sessions <span>{sessions.length}</span>
         </h3>
-        {owner && item.status !== "completed" && item.status !== "cancelled" && !managingSessions && (
-          <div className="session-manager-entry">
-            <button className="primary" onClick={() => manage("smart")}>
-              <Clock3 size={14} /> Find a time for me
-            </button>
-            <button className="secondary" onClick={() => manage("exact")}>
-              <Pencil size={14} /> Manage sessions
-            </button>
-            <span className="micro muted">Find time for additional work, or manage sessions to shorten hours and remove days.</span>
-          </div>
-        )}
         {managingSessions ? (
           <SessionManager key={`${sessionMode}-${sessionRemaining}`} item={item} state={state} initialMode={sessionMode} initialSessions={sessionDrafts} initialRemainingMinutes={sessionRemaining} initialProgressCompleted={sessionRemaining === undefined ? undefined : completed} onSaved={onState} onClose={() => setManagingSessions(false)} />
         ) : sessions.length ? (
@@ -429,7 +418,7 @@ export function WorkDetails({
                 <>
                   {item.dailyPlan?.length ? (
                     <button className="secondary" onClick={() => manage("exact")}>
-                      <Pencil size={14} /> Edit daily hours and sessions
+                      <Pencil size={14} /> Edit hours
                     </button>
                   ) : (
                     <SessionEditor session={s} state={state} command={command} onResize={resized => manage("exact", undefined, resized)} />
@@ -476,19 +465,11 @@ export function WorkDetails({
           ))
         ) : (
           <p className="muted">
-            No executable sessions. The project remains visible on your plate.
+            No hours booked. Add hours when you are ready to work on this project.
           </p>
         )}
         {owner && !managingSessions && item.remainingMinutes === null && item.status !== "completed" && item.status !== "cancelled" && (
-          <p className="micro muted">Use Find a time for me to add hours, or ask ADA. The project total can stay unknown.</p>
-        )}
-        {owner && !managingSessions && item.remainingMinutes !== null && item.status !== "waiting" && item.status !== "completed" && item.status !== "cancelled" && (
-          <button
-            className="text-button"
-            onClick={() => command({ type: "schedule", itemId: item.id })}
-          >
-            Schedule remaining work <span>→</span>
-          </button>
+          <p className="micro muted">Use Add hours or ask ADA. The project total can stay unknown.</p>
         )}
       </section>
       {owner && (
@@ -500,7 +481,7 @@ export function WorkDetails({
           <div className="form-grid">
             <Field
               label="Remaining hours"
-              hint={item.remainingMinutes === null ? "Not estimated yet. Enter hours when you know the remaining work." : undefined}
+              hint={item.remainingMinutes === null ? "Leave blank when hours are added as needed." : undefined}
             >
               <input
                 type="number"
@@ -540,7 +521,7 @@ export function WorkDetails({
           >
             Save progress
           </button>
-          {!!item.dailyPlan?.length && <p className="micro muted">To change which days you work or how many hours each day needs, use Edit hours and days. You can update remaining effort in the same save.</p>}
+          {!!item.dailyPlan?.length && <p className="micro muted">To change which days you work or how many hours each day needs, use Edit hours. You can update remaining effort in the same save.</p>}
           <div className="form-grid progress-status">
             <Field label="Waiting reason (if pausing)">
               <input

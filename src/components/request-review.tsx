@@ -1,4 +1,5 @@
 "use client";
+import { pendingBookingCommands } from "@/lib/pending-bookings";
 import { useState } from "react";
 import { Download, Paperclip, TriangleAlert } from "lucide-react";
 import type { AppState, Attachment, PendingRequest, ScheduleProposal, WorkCommand, WorkItem, WorkSession } from "@/lib/types";
@@ -55,10 +56,9 @@ export function RequestAttachments({ state, request, onState }: Props) {
 }
 
 export function RequestReview({ state, request, onState, onClose }: Props & { onClose: () => void }) {
-  const [commands, setCommands] = useState<WorkCommand[]>(() => request.proposal.commands.map(command => {
+  const [commands, setCommands] = useState<WorkCommand[]>(() => pendingBookingCommands(request, state.settings.timeZone, state.settings.weekdays).map(command => {
     // Request text never carries permission to override existing protected time or deadlines.
-    if ("overrideProtected" in command || "overrideDeadline" in command) return { ...command, overrideProtected: false, overrideDeadline: false } as WorkCommand;
-    return command;
+    return "overrideProtected" in command || "overrideDeadline" in command ? { ...command, overrideProtected: false, overrideDeadline: false } as WorkCommand : command;
   }));
   const [overrides, setOverrides] = useState<string[]>([]);
   const [deadlineEdits, setDeadlineEdits] = useState<Record<string, string>>( {} );
@@ -67,11 +67,22 @@ export function RequestReview({ state, request, onState, onClose }: Props & { on
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pending = request.status === "pending" || request.status === "needs_information";
-  const newItems = commands.flatMap(command => command.type === "create" ? [command.item] : []);
+  const newItems = commands.flatMap(command => command.type === "create" ? [{ ...command.item,
+    windowStart: command.bookingWindow?.startDate ?? command.item.windowStart,
+    windowEnd: command.bookingWindow?.endDate ?? command.item.windowEnd }] : []);
   const protectedItems = state.items.filter(item => state.sessions.some(session => session.workItemId === item.id && session.protected && session.status === "planned"));
   const firmItems = state.items.filter(item => item.deadline && item.status !== "completed" && item.status !== "cancelled");
   function patchItem(id: string, patch: Partial<WorkItem>) {
-    setCommands(current => current.map(command => command.type === "create" && command.item.id === id ? { ...command, item: { ...command.item, ...patch }, sessions: undefined } : command));
+    setCommands(current => current.map(command => {
+      if (command.type !== "create" || command.item.id !== id) return command;
+      const item = { ...command.item, ...patch };
+      const bookingChanged = patch.windowStart !== undefined || patch.windowEnd !== undefined || patch.remainingMinutes !== undefined;
+      const startDate = patch.windowStart ?? command.bookingWindow?.startDate ?? item.windowStart;
+      const endDate = patch.windowEnd !== undefined ? patch.windowEnd ?? startDate : command.bookingWindow?.endDate ?? item.windowEnd ?? startDate;
+      const dates = patch.windowStart === undefined && patch.windowEnd === undefined ? command.bookingWindow?.dates : undefined;
+      return bookingChanged ? { ...command, item: { ...item, dailyPlan: undefined }, sessions: undefined,
+        smartFit: undefined, bookingWindow: { startDate, endDate, ...(dates ? { dates } : {}) } } : { ...command, item };
+    }));
     setProposal(null);
   }
   function revisedCommands(): WorkCommand[] {
@@ -116,8 +127,8 @@ export function RequestReview({ state, request, onState, onClose }: Props & { on
         <h3>{item.title}</h3>
         <p className="micro">{state.clients.find(client => client.id === item.clientId)?.name}</p>
         <div className="form-grid">
-          <Field label="Earliest start"><input type="date" required value={item.windowStart} disabled={busy} onChange={event => patchItem(item.id, { windowStart: event.target.value, allowedDates: [] })} /></Field>
-          <Field label="Planning window ends"><input type="date" value={item.windowEnd ?? ""} disabled={busy} onChange={event => patchItem(item.id, { windowEnd: event.target.value || null, allowedDates: [] })} /></Field>
+          <Field label="First work day"><input type="date" required value={item.windowStart} disabled={busy} onChange={event => patchItem(item.id, { windowStart: event.target.value, allowedDates: [] })} /></Field>
+          <Field label="Last work day"><input type="date" value={item.windowEnd ?? ""} disabled={busy} onChange={event => patchItem(item.id, { windowEnd: event.target.value || null, allowedDates: [] })} /></Field>
           <Field label="Estimated work (hours)"><input type="number" min="0.25" step="0.25" value={item.estimatedMinutes === null ? "" : item.estimatedMinutes / 60} disabled={busy} onChange={event => { const minutes = event.target.value ? Math.round(Number(event.target.value) * 60) : null; patchItem(item.id, { estimatedMinutes: minutes, remainingMinutes: minutes }); }} /></Field>
           <Field label="Approved priority"><select value={item.priorityId} disabled={busy} onChange={event => patchItem(item.id, { priorityId: event.target.value })}>{state.priorities.map(priority => <option key={priority.id} value={priority.id}>{priority.label}</option>)}</select></Field>
           <Field label="Target date (flexible)"><input type="date" value={item.targetDate ?? ""} disabled={busy} onChange={event => patchItem(item.id, { targetDate: event.target.value || null })} /></Field>
@@ -141,7 +152,7 @@ export function RequestReview({ state, request, onState, onClose }: Props & { on
           if (!after) return null;
           const prior = state.sessions.filter(session => session.workItemId === id && session.status === "planned");
           const next = proposal.sessions.filter(session => session.workItemId === id && session.status === "planned");
-          return <details key={id} open className="inset"><summary>{after.title} · {after.remainingMinutes === null ? "Unestimated" : formatHours(after.remainingMinutes)} remaining</summary>
+          return <details key={id} open className="inset"><summary>{after.title} · {after.remainingMinutes === null ? "Hours added as needed" : formatHours(after.remainingMinutes)} remaining</summary>
             <p className="micro">Priority: {before ? state.priorities.find(priority => priority.id === before.priorityId)?.label : "New"} → {state.priorities.find(priority => priority.id === after.priorityId)?.label}. Firm deadline: {before?.deadline ?? "None"} → {after.deadline ?? "None"}.</p>
             <div className="form-grid"><div><strong>Before</strong>{prior.length ? prior.map(session => <p className="micro" key={session.id}>{sessionLabel(session, state)}</p>) : <p className="micro">No sessions</p>}</div><div><strong>After approval</strong>{next.length ? next.map(session => <p className="micro" key={session.id}>{sessionLabel(session, state)}</p>) : <p className="micro">No sessions</p>}</div></div>
           </details>;

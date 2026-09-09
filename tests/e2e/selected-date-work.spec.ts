@@ -52,10 +52,10 @@ for (const width of [1440, 390]) test(`selected day opens manual work, previews 
   await add(page).click();
   const form = page.getByRole("dialog", { name: "Make room for new work", exact: true });
   await expect(form.getByLabel("Work day", { exact: true })).toHaveValue("2026-09-10");
-  await expect(form.getByRole("button", { name: /Find a time for me Choose days/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(form.getByRole("button", { name: /^Total hours ADA fits/ })).toHaveAttribute("aria-pressed", "true");
   await form.getByLabel("What needs doing?", { exact: true }).fill("Cedar page edits");
   await form.getByLabel("Hours to book", { exact: true }).fill("2");
-  await form.getByRole("button", { name: "Check schedule", exact: true }).click();
+  await form.getByRole("button", { name: "Review changes", exact: true }).click();
   await expect(form.getByRole("heading", { name: "This fits your schedule" })).toBeVisible();
   expect(context.fixture().items).toHaveLength(0);
   expect(context.requests.map(r => r.action)).toEqual(["preview"]);
@@ -83,21 +83,23 @@ test("cross-month range is prefilled, cancel keeps selection, and hours may be s
   const form = page.getByRole("dialog");
   await expect(form.getByLabel("First day", { exact: true })).toHaveValue("2026-09-29");
   await expect(form.getByLabel("Last day", { exact: true })).toHaveValue("2026-10-02");
-  await expect(form.getByRole("combobox", { name: "Spread the hours", exact: true })).toHaveValue("total");
-  await form.getByRole("button", { name: "Choose exact times", exact: false }).click();
-  await expect(form.getByLabel("Earliest start", { exact: true })).toHaveValue("2026-09-29");
-  await expect(form.getByLabel(/^Project span ends/)).toHaveValue("2026-10-02");
+  await expect(form.getByRole("combobox", { name: "Spread the hours", exact: true })).toHaveCount(0);
+  await form.getByText("Advanced", { exact: true }).click();
+  await form.getByLabel("Set exact times", { exact: true }).check();
   await expect(form.getByLabel("Session dates (YYYY-MM-DD, comma-separated)", { exact: true })).toHaveValue("2026-09-29");
   await form.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.locator(".date-selection-toolbar strong")).toHaveText("Sep 29, 2026 – Oct 2, 2026");
   expect(context.requests).toHaveLength(0);
   await add(page).click();
   await form.getByLabel("What needs doing?", { exact: true }).fill("Cedar daily page edits");
-  await form.getByRole("combobox", { name: "Spread the hours", exact: true }).selectOption("per_day");
-  await form.getByLabel("Hours each working day", { exact: true }).fill("2");
-  await form.getByRole("button", { name: "Check schedule", exact: true }).click();
+  await form.getByRole("button", { name: /^Days and hours Choose/ }).click();
+  for (let index = 1; index <= 4; index++) {
+    if (index > 1) await form.getByRole("button", { name: "Add day", exact: true }).click();
+    await form.getByLabel(`Hours on day ${index}`, { exact: true }).fill("2");
+  }
+  await form.getByRole("button", { name: "Review changes", exact: true }).click();
   await expect(form.getByRole("heading", { name: "This fits your schedule" })).toBeVisible();
-  expect(context.requests[0].commands[0]).toMatchObject({ type: "create", item: { estimatedMinutes: 480 }, smartFit: { startDate: "2026-09-29", endDate: "2026-10-02", minutes: 120, distribution: "per_day" } });
+  expect(context.requests[0].commands[0]).toMatchObject({ type: "create", item: { estimatedMinutes: 480, timelineMode: "bookings", dailyPlan: ["2026-09-29", "2026-09-30", "2026-10-01", "2026-10-02"].map(date => ({ date, minutes: 120 })) } });
   await form.getByRole("button", { name: "Confirm changes", exact: true }).click();
   expect(context.fixture().sessions.map(s => localDate(s.start, context.fixture().settings.timeZone))).toEqual(["2026-09-29", "2026-09-30", "2026-10-01", "2026-10-02"]);
 });
@@ -115,7 +117,7 @@ test("cancel, project timeline, and weekend selections never silently book work"
   await expect(form.getByLabel("Work day", { exact: true })).toHaveValue("2026-09-26");
   await expect(form.locator(".smart-fit-summary")).toContainText("no working days");
   await form.getByLabel("What needs doing?", { exact: true }).fill("Weekend edits");
-  await form.getByRole("button", { name: "Check schedule", exact: true }).click();
+  await form.getByRole("button", { name: "Review changes", exact: true }).click();
   await expect(form.getByRole("heading", { name: "This needs a decision" })).toBeVisible();
   await expect(form.getByRole("button", { name: "Confirm changes", exact: true })).toHaveCount(0);
   expect(context.fixture().items).toHaveLength(0);
@@ -133,7 +135,7 @@ test("requesters can manually book selected dates; viewers cannot create work", 
   const form = page.getByRole("dialog", { name: "Find an opening", exact: true });
   await expect(form.getByLabel("Work day", { exact: true })).toHaveValue("2026-09-10");
   await form.getByLabel("What needs doing?", { exact: true }).fill("Cedar requested edits");
-  await form.getByRole("button", { name: "Check schedule", exact: true }).click();
+  await form.getByRole("button", { name: "Review changes", exact: true }).click();
   await expect(form.getByRole("button", { name: "Book this work", exact: true })).toBeVisible();
   await form.getByRole("button", { name: "Book this work", exact: true }).click();
   expect(context.fixture().items).toHaveLength(1);

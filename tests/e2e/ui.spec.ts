@@ -1,18 +1,19 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type APIRequestContext } from "@playwright/test";
-import { localDate } from "../../src/lib/time";
+import { addDays, localDate, minutesBetween, nextWorkDate } from "../../src/lib/time";
 import { asActor, commit, exactSession, futureDate, makeItem, origin, post, preview, state } from "./helpers";
 
-async function pendingDisplacement(request: APIRequestContext, title: string, days: number) {
+async function pendingDisplacement(request: APIRequestContext, title: string, days: number, multipleDays = false) {
   await asActor(request, "bryan");
   const before = await state(request);
   const date = futureDate(before, days);
-  const blocker = makeItem(before, `${title} existing commitment`, { windowStart: date, windowEnd: date, targetDate: date, estimatedMinutes: 390, remainingMinutes: 390 });
-  await commit(request, await preview(request, [{ type: "create", item: blocker, sessions: [exactSession(before, blocker, "09:00", "12:00"), exactSession(before, blocker, "12:30", "16:00")] }]));
+  const dates = multipleDays ? [date, nextWorkDate(addDays(date, 1), before.settings)] : [date], endDate = dates.at(-1)!;
+  const blocker = makeItem(before, `${title} existing commitment`, { windowStart: date, windowEnd: endDate, targetDate: endDate, estimatedMinutes: 390 * dates.length, remainingMinutes: 390 * dates.length });
+  await commit(request, await preview(request, [{ type: "create", item: blocker, sessions: dates.flatMap(workDate => [exactSession(before, { ...blocker, windowStart: workDate }, "09:00", "12:00"), exactSession(before, { ...blocker, windowStart: workDate }, "12:30", "16:00")]) }]));
   await asActor(request, "william");
   const current = await state(request);
-  const work = makeItem(current, title, { windowStart: date, windowEnd: date, targetDate: date, estimatedMinutes: 60, remainingMinutes: 60, requestedPriorityId: "high" });
-  const proposal = await preview(request, [{ type: "create", item: work }]);
+  const work = makeItem(current, title, { windowStart: date, windowEnd: endDate, targetDate: endDate, estimatedMinutes: 60, remainingMinutes: 60, requestedPriorityId: "high" });
+  const proposal = await preview(request, [{ type: "create", item: work, bookingWindow: { startDate: date, endDate } }]);
   expect(proposal.status).toBe("approval_required");
   const submitted = await post(request, "commands", { commands: proposal.commands, operationId: proposal.operationId, baseVersion: proposal.baseVersion, reviewFingerprint: proposal.reviewFingerprint, action: "request" });
   expect(submitted.ok(), await submitted.text()).toBe(true);
@@ -55,7 +56,7 @@ test("manual owner entry previews before saving, then supports explicit project 
   await dialog.getByLabel("Description", { exact: true }).fill("Verify manual effort, capacity preview, and completion.");
   await dialog.getByLabel("Hours to book", { exact: true }).fill("0.5");
   await dialog.getByLabel("Work day", { exact: true }).fill(date);
-  await dialog.getByRole("button", { name: "Check schedule" }).click();
+  await dialog.getByRole("button", { name: "Review changes" }).click();
   await expect(dialog.getByRole("heading", { name: "This fits your schedule" })).toBeVisible();
   expect((await state(page.request)).version).toBe(before.version);
   await dialog.getByRole("button", { name: "Confirm changes" }).click();
@@ -82,7 +83,7 @@ test("requester sees the shared plate with read-only details and can clean-fit b
   await page.goto("/?work=drive-software");
   const details = page.getByRole("dialog");
   await expect(details).toBeVisible();
-  await expect(details.getByRole("button", { name: "Edit work" })).toHaveCount(0);
+  await expect(details.getByRole("button", { name: "Edit details" })).toHaveCount(0);
   await expect(details.getByRole("button", { name: "Mark project complete" })).toHaveCount(0);
   await details.getByRole("button", { name: "Close dialog" }).click();
   const before = await state(page.request);
@@ -94,7 +95,7 @@ test("requester sees the shared plate with read-only details and can clean-fit b
   await form.getByLabel("Hours to book", { exact: true }).fill("0.5");
   await form.getByLabel("Work day", { exact: true }).fill(date);
   await form.getByRole("combobox", { name: "Suggested priority", exact: true }).selectOption("high");
-  await form.getByRole("button", { name: "Check schedule" }).click();
+  await form.getByRole("button", { name: "Review changes" }).click();
   await form.getByRole("button", { name: "Book this work" }).click();
   await expect(form).toHaveCount(0);
   const after = await state(page.request);
@@ -204,7 +205,11 @@ test("owner reviews revised effort and priority before approving visible displac
   const after = await state(page.request);
   expect(after.requests.find(request => request.id === entry.id)?.status).toBe("approved");
   expect(after.items.find(item => item.id === work.id)).toMatchObject({ estimatedMinutes: 90, remainingMinutes: 90, requesterId: "william", priorityId: "normal", requestedPriorityId: "high" });
-  expect(after.items.find(item => item.id === blocker.id)?.forecastDate).not.toBe(blocker.targetDate);
+  const beforeBookings = pending.sessions.filter(session => session.workItemId === blocker.id && session.status === "planned");
+  const afterBookings = after.sessions.filter(session => session.workItemId === blocker.id && session.status === "planned");
+  expect(afterBookings.map(session => [session.start, session.end]).sort()).not.toEqual(beforeBookings.map(session => [session.start, session.end]).sort());
+  expect(afterBookings.reduce((sum, session) => sum + minutesBetween(session.start, session.end), 0)).toBe(beforeBookings.reduce((sum, session) => sum + minutesBetween(session.start, session.end), 0));
+  expect(after.items.find(item => item.id === blocker.id)).toMatchObject({ remainingMinutes: blocker.remainingMinutes, estimatedMinutes: blocker.estimatedMinutes });
   expect(after.version).toBe(pending.version + 1);
   const attachment = after.attachments.find(file => file.workItemId === work.id && file.name === "priority-request.md")!;
   expect(await (await page.request.get(`/api/attachments/${attachment.id}`)).text()).toBe(brief);
@@ -240,6 +245,29 @@ test("stale approval cannot move work and a fresh review recovers without losing
   await dialog.getByRole("button", { name: "Approve this reviewed plan" }).click();
   await expect(dialog).toHaveCount(0);
   expect((await state(page.request)).items.find(item => item.id === work.id)?.estimatedMinutes).toBe(90);
+});
+
+test("multi-day request approval keeps its original range flexible and leaves the submitted request unchanged", async ({ page }) => {
+  const { work, entry, pending } = await pendingDisplacement(page.request, "E2E bounded multi-day request", 91, true);
+  await page.goto("/");
+  await page.getByRole("navigation").getByRole("button", { name: /^Requests/ }).click();
+  await page.locator("article.request-card").filter({ hasText: work.title }).getByRole("button", { name: "Review with current schedule" }).click();
+  const dialog = page.getByRole("dialog", { name: "Review priority request" });
+  await dialog.getByLabel("Estimated work (hours)").fill("1.5");
+  await dialog.getByRole("button", { name: "Preview revised plan" }).click();
+  await expect(dialog.getByRole("heading", { name: "Review before approval" })).toBeVisible();
+  const reviewed = await state(page.request);
+  expect(reviewed.version).toBe(pending.version);
+  expect(reviewed.requests.find(request => request.id === entry.id)!.proposal).toEqual(entry.proposal);
+  await dialog.getByRole("button", { name: "Approve this reviewed plan" }).click();
+  await expect(dialog).toHaveCount(0);
+  const saved = await state(page.request), item = saved.items.find(item => item.id === work.id)!;
+  expect(item).toMatchObject({ estimatedMinutes: 90, remainingMinutes: 90, dateConstraints: { earliestStart: null, allowedDates: [] } });
+  expect(item.dailyPlan).toBeUndefined();
+  expect(saved.sessions.filter(session => session.workItemId === item.id).every(session => {
+    const date = localDate(session.start, saved.settings.timeZone); return date >= work.windowStart && date <= work.windowEnd!;
+  })).toBe(true);
+  expect(saved.requests.find(request => request.id === entry.id)!.proposal).toEqual(entry.proposal);
 });
 
 test("typed commands save clean work while future-tense update language remains a draft", async ({ page }) => {

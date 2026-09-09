@@ -3497,3 +3497,25 @@ small {
 .focus-meeting { background: #24333a; border-color: #465e6a; }
 .heading-actions { flex-wrap: wrap; justify-content: flex-end; }
 @media (min-width: 1001px) { .heading-actions { max-width: 440px; } }
+
+/* Day/hour authoring shares the calendar's existing form styling. */
+.work-hours-mode { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.day-hours-fields { border: 0; padding: 0; margin: 18px 0; min-width: 0; }
+.day-hours-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto; gap: 12px; align-items: end; border-bottom: 1px solid var(--border); padding: 12px 0; }
+.day-hours-row .field { min-width: 0; margin: 0; }
+.day-hours-row input { min-width: 0; width: 100%; }
+.day-hours-row > button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 44px; margin-bottom: 0; }
+.day-hours-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 14px 0; }
+.day-hours-footer strong { color: var(--mint); font-size: 12px; }
+.day-change-review p { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 10px 0; margin: 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.day-change-review p span { color: var(--mint); }
+.work-advanced { margin: 20px 0; border-top: 1px solid var(--border); padding-top: 16px; min-width: 0; }
+.work-advanced > summary { cursor: pointer; font-size: 12px; font-weight: 600; min-height: 30px; }
+.work-advanced[open] > summary { margin-bottom: 16px; }
+.ongoing-work-fields h3 { margin-top: 0; font-size: 14px; }
+@media (max-width: 520px) {
+  .work-hours-mode { grid-template-columns: 1fr; }
+  .day-hours-row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .day-hours-row > button { justify-self: end; }
+  .day-hours-row input { min-height: 44px; }
+}

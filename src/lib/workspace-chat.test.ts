@@ -26,7 +26,7 @@ function intent(text: string, patch: Record<string, unknown> = {}) {
 }
 const reorderText = "Put Tyler first, Higher Ground second, Oral Surgery third and Homepage demo last today.";
 function bookingIntent(text: string, edit: Record<string, unknown>, extra: Record<string, unknown> = {}) {
-  return intent(text, { intent: "edit", references: [], orderMode: null, edit: { kind: "resize", reference: "Homepage demo", sourceDate: null, targetDate: null, endDate: null, minutes: null, amountMode: null, sourceStartTime: null, targetStartTime: null, ...edit }, ...extra });
+  return intent(text, { intent: "edit", references: [], orderMode: null, edit: { kind: "resize", reference: "Homepage demo", sourceDate: null, targetDate: null, endDate: null, minutes: null, amountMode: null, sourceStartTime: null, targetStartTime: null, dayHours: [], ...edit }, ...extra });
 }
 beforeEach(() => { parse.mockReset().mockRejectedValue(new Error("Unexpected provider call in isolated test")); });
 
@@ -247,7 +247,7 @@ describe("existing-project booking edits", () => {
     const added = compileWorkspaceChatIntent(bookingIntent(text, { kind: "add" }), text, state, owner, day, now, "too-much", []);
     expect(added.reply.kind).toBe("clarification"); expect(added.reply.proposal!.items[3].remainingMinutes).toBe(120);
     state.sessions.push({ ...state.sessions[3], id: "second-demo", start: at("15:00"), end: at("16:00") });
-    const resize = "Make Homepage demo 1 hour today";
+    const resize = "Resize the Homepage demo booking to 1 hour today";
     expect(compileWorkspaceChatIntent(bookingIntent(resize, {}), resize, state, owner, day, now, "ambiguous", []).reply.message).toContain("multiple bookings");
   });
   it("grounds new amounts/dates and rejects forged proposals, zero duration and old override permission", () => {

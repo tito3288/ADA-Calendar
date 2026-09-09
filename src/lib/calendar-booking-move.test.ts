@@ -79,7 +79,7 @@ describe("calendar move preview and persistent undo selection", () => {
     const proposal = planCommands(state, [{ type: "move_bookings", ...selection }], state.actor, { now, operationId: operation });
     expect(proposal.status, JSON.stringify(proposal.conflicts)).toBe("ready");
     const details = calendarBookingMovePreview(state, proposal, selection);
-    expect(details?.changes).toHaveLength(2); expect(details?.minutes).toBe(120);
+    expect(details?.before).toHaveLength(2); expect(details?.minutes).toBe(120);
     expect(details?.days.map(day => day.date)).toEqual([day, target]);
     expect(details?.days[0].after.availableMinutes).toBe(450);
     expect(details?.days[1].after.availableMinutes).toBe(330);

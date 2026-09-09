@@ -59,7 +59,7 @@ describe("booking edits through authenticated atomic commands",()=>{
     expect(await getDemoState(owner)).toEqual(before);expect(await notes()).toEqual(privateNotes);
     expect((await commit(proposal)).status).toBe(200);const saved=await getDemoState(owner);
     expect(saved.version).toBe(1);expect(saved.events).toHaveLength(1);expect(saved.items).toHaveLength(2);
-    expect(saved.sessions[0]).toEqual({...before.sessions[0],end:at("10:00"),focusOverrideMinutes:60});expect(saved.sessions[1]).toEqual(before.sessions[1]);
+    expect(saved.sessions[0]).toEqual({...before.sessions[0],end:at("10:00")});expect(saved.sessions[1]).toEqual(before.sessions[1]);
     expect(saved.items[0]).toMatchObject({estimatedMinutes:240,remainingMinutes:240,minimumSessionMinutes:120,status:"planned"});expect(saved.items[1]).toEqual(before.items[1]);expect(await notes()).toEqual(privateNotes);
     expect(saved.notifications.every(n=>n.status==="captured")).toBe(true);
     expect((await commit(proposal)).status).toBe(200);expect(await getDemoState(owner)).toEqual(saved);
@@ -68,7 +68,7 @@ describe("booking edits through authenticated atomic commands",()=>{
     const before=await getDemoState(owner),proposal=await preview(`identity-${command.type}`,command);
     expect((await commit(proposal)).status).toBe(200);const saved=await getDemoState(owner);
     expect(saved.sessions).toEqual(proposal.sessions);expect(saved.sessions).toHaveLength(3);expect(saved.sessions[1]).toEqual(before.sessions[1]);
-    expect(saved.sessions[2]).toMatchObject({start:at("10:00",next),end:at("11:00",next),focusOverrideMinutes:60});
+    expect(saved.sessions[2]).toMatchObject({start:at("10:00",next),end:at("11:00",next)});
     expect(saved.items).toHaveLength(before.items.length);expect(saved.items[0].remainingMinutes).toBe(240);
     expect(saved.sessions.filter(s=>s.workItemId==="build").reduce((sum,s)=>sum+minutesBetween(s.start,s.end),0)).toBe(command.type==="add_booking"?180:120);
     expect((await commit(proposal)).status).toBe(200);expect(await getDemoState(owner)).toEqual(saved);
@@ -106,10 +106,10 @@ describe("booking edits through authenticated atomic commands",()=>{
     expect((await send({commands:[add],operationId:"cross-edit",action:"preview"},"https://invalid.example.test")).status).toBe(400);
     const mixed=await send({commands:[resize,transfer],operationId:"mixed-edit",action:"preview"});expect((await mixed.json()).proposal.conflicts[0].code).toBe("booking_mixed_commands");expect(await getDemoState(owner)).toEqual(before);
   });
-  it("preserves saved focus metadata through a later ordinary manual move",async()=>{
+  it("keeps a shortened booking valid through a later ordinary manual move without focus metadata",async()=>{
     const resized=await preview("resize-for-manual");expect((await commit(resized)).status).toBe(200);
     const manual=await preview("manual-move",{type:"move",sessionId:"build-session",start:at("13:00",next),end:at("14:00",next)});
     expect((await commit(manual)).status).toBe(200);const saved=await getDemoState(owner);
-    expect(saved.sessions).toHaveLength(2);expect(saved.sessions.find((s:WorkSession)=>s.id==="build-session")).toMatchObject({start:at("13:00",next),end:at("14:00",next),focusOverrideMinutes:60});expect(saved.items[0].remainingMinutes).toBe(240);
+    expect(saved.sessions).toHaveLength(2);expect(saved.sessions.find((s:WorkSession)=>s.id==="build-session")).toMatchObject({start:at("13:00",next),end:at("14:00",next)});expect(saved.items[0].remainingMinutes).toBe(240);
   });
 });

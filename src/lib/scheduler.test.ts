@@ -120,7 +120,7 @@ describe("deterministic effort allocation", () => {
     expect(result.baseVersion).toBe(7);
     expect(result.operationId).toBe("stable-operation");
     expect(total(sessionsFor(result, "build"))).toBe(480);
-    expect(sessionsFor(result, "build").every((entry) => minutesBetween(entry.start, entry.end) >= 120)).toBe(true);
+    expect(sessionsFor(result, "build").every((entry) => minutesBetween(entry.start, entry.end) >= 15)).toBe(true);
     expect(result.items[0].forecastDate).toBe("2026-09-08");
     expect(result.items[0].targetDate).toBe(DAY);
     expect(validateSchedule(apply(base, result), NOW)).toEqual([]);
@@ -137,7 +137,7 @@ describe("deterministic effort allocation", () => {
   });
 
   it.each(["deadline", "allowed dates"] as const)("allocates %s constraints before higher-priority flexible work", (restriction) => {
-    const constrained = item("z-constrained", 180, restriction === "deadline" ? { deadline: DAY } : { allowedDates: [DAY] });
+    const constrained = item("z-constrained", 180, restriction === "deadline" ? { deadline: DAY } : { dateConstraints: { earliestStart: null, allowedDates: [DAY] } });
     const flexible = item("a-flexible", 390, { priorityId: "high" });
     const result = planCommands(snapshot(), [{ type: "create", item: flexible }, { type: "create", item: constrained }], owner, { now: NOW });
     expect(result.status).toBe("ready");
@@ -193,12 +193,12 @@ describe("deterministic effort allocation", () => {
     expect(result.affectedItemIds).toEqual(["new"]);
   });
 
-  it("does not fracture a focus requirement just to fill a short gap", () => {
+  it("fits hours across shorter openings without a project focus minimum", () => {
     const base = snapshot([item("other", 180)], [session("other", "09:00", "11:00"), session("other", "13:30", "14:30")]);
     const result = planCommands(base, [{ type: "create", item: item("focus", 180, { minimumSessionMinutes: 120, deadline: DAY }) }], owner, { now: NOW });
-    expect(result.status).toBe("infeasible");
-    expect(result.conflicts.some((entry) => entry.code === "firm_deadline")).toBe(true);
-    expect(result.sessions).toEqual(base.sessions);
+    expect(result.status).toBe("ready");
+    expect(total(sessionsFor(result,"focus"))).toBe(180);
+    expect(result.sessions.slice(0,base.sessions.length)).toEqual(base.sessions);
   });
 
   it("respects allowed dates and real deadlines", () => {
@@ -295,10 +295,10 @@ describe("requester authority and collision previews", () => {
     expect(result.items[0]).toMatchObject({ priorityId: "low", requestedPriorityId: "urgent", requesterId: requester.id });
   });
 
-  it("rejects explicitly supplied focus fragments instead of silently accepting them", () => {
+  it("accepts explicitly supplied short sessions without project focus limits", () => {
     const result = planCommands(snapshot(), [{ type: "create", item: item("focus", 120, { minimumSessionMinutes: 120 }), sessions: [session("focus", "09:00", "10:00"), session("focus", "11:00", "12:00")] }], requester, { now: NOW });
-    expect(result.status).toBe("approval_required");
-    expect(result.conflicts.some((entry) => entry.code === "focus_length")).toBe(true);
+    expect(result.status).toBe("ready");
+    expect(total(result.sessions)).toBe(120); expect(result.sessions).toHaveLength(2);
   });
 });
 
@@ -362,9 +362,9 @@ describe("interruptions and reserve accounting", () => {
     expect(validateSchedule(apply(base, result), NOW)).toEqual([]);
   });
 
-  it("uses a clean later placement when earlier displacement would break another firm deadline", () => {
+  it("uses a clean later placement when earlier time is protected", () => {
     const old = item("firm focused work", 180, { minimumSessionMinutes: 180, deadline: DAY });
-    const base = snapshot([old], [session(old.id, "09:00", "12:00")]);
+    const base = snapshot([old], [session(old.id, "09:00", "12:00", { protected: true })]);
     base.blocks.push({ id: "meeting", title: "Meeting", start: at("13:00"), end: at("14:00"), kind: "meeting" });
     const result = planCommands(base, [{ type: "create", item: item("urgent edit", 30, { priorityId: "urgent", deadline: DAY }), urgent: true }], owner, { now: NOW });
     expect(result.status).toBe("ready");

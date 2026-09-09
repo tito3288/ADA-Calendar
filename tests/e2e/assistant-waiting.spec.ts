@@ -70,19 +70,20 @@ test("mocked-provider waiting work can be saved, edited without hours, then expl
   expect(fixture.sessions).toEqual([]);
   await dialog.getByRole("button", { name: "Close dialog", exact: true }).click();
   await page.getByRole("button", { name: "Oil Survey system Awaiting client days and hours", exact: true }).click();
-  await expect(dialog.getByText("Not estimated", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("Hours added as needed", { exact: true }).first()).toBeVisible();
   await expect(dialog.getByLabel(/^Remaining hours/)).toHaveValue("");
   await expect(dialog.getByRole("button", { name: "Resume work", exact: true })).toBeDisabled();
   await expect(dialog.getByRole("button", { name: "Save progress", exact: true })).toBeDisabled();
   await dialog.screenshot({ path: testInfo.outputPath("waiting-without-estimate.png") });
 
-  await dialog.getByRole("button", { name: "Edit work", exact: true }).click();
-  await expect(dialog.getByLabel(/^Remaining effort \(hours\)/)).toHaveValue("");
+  await dialog.getByRole("button", { name: "Edit details", exact: true }).click();
+  await expect(dialog.getByLabel(/^Remaining effort \(hours\)/)).toHaveCount(0);
   await dialog.getByLabel("What needs doing?", { exact: true }).fill("Oil Survey system — awaiting details");
-  await dialog.getByRole("button", { name: "Check schedule", exact: true }).click();
+  await dialog.getByRole("button", { name: "Review changes", exact: true }).click();
   await dialog.getByRole("button", { name: "Confirm changes", exact: true }).click();
   await expect(dialog.getByRole("heading", { name: "Oil Survey system — awaiting details", exact: true })).toBeVisible();
-  expect(committed[0][0]).toMatchObject({ type: "update", patch: { remainingMinutes: null, estimatedMinutes: null } });
+  expect(committed[0][0]).toMatchObject({ type: "update", patch: { title: "Oil Survey system — awaiting details" } });
+  expect(fixture.items[0]).toMatchObject({ remainingMinutes: null, estimatedMinutes: null });
   expect(fixture.items[0].status).toBe("waiting");
   expect(fixture.sessions).toEqual([]);
   await dialog.getByLabel(/^Remaining hours/).fill("2");

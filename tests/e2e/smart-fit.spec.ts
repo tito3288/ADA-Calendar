@@ -18,7 +18,7 @@ async function setup(page: Page, width: number, withFridayBooking = false) {
     clients: [{ id: "cedar", name: "Cedar Studio", aliases: [] }], items: [], sessions: [], blocks: [], events: [], requests: [], notifications: [], attachments: [], emailDrafts: [] };
   fixture.settings.reserveMinutes = 0;
   const ongoing = newWorkItem(fixture.actor, "2026-09-08", { id: "cedar-survey", clientId: "cedar", title: "Cedar survey", category: "software", webKind: null,
-    status: "waiting", estimatedMinutes: null, remainingMinutes: null, windowEnd: "2026-10-31", minimumSessionMinutes: 120, blockedReason: "Waiting for client details" });
+    status: "waiting", estimatedMinutes: null, remainingMinutes: null, timelineMode: "span", windowEnd: "2026-10-31", minimumSessionMinutes: 120, blockedReason: "Waiting for client details" });
   const other = newWorkItem(fixture.actor, "2026-09-09", { id: "existing-work", clientId: "cedar", title: "Existing protected work", estimatedMinutes: 60, remainingMinutes: 60 });
   fixture.items = [ongoing, other];
   const at = (day: string, time: string) => localDateTime(day, time, fixture.settings.timeZone);
@@ -64,166 +64,148 @@ async function openOngoingProject(page: Page) {
   return page.getByRole("dialog", { name: "Cedar survey", exact: true });
 }
 
-const bookingAuthorization = "Book these sessions and change status from Waiting to Planned.";
-
 for (const width of [1440, 390]) test(`finds two hours today on an existing unknown-total project at ${width}px`, async ({ page }, info) => {
   const context = await setup(page, width);
   const dialog = await openOngoingProject(page);
-  await dialog.getByRole("button", { name: "Find a time for me", exact: true }).click();
-  await expect(dialog.getByLabel("Hours to book", { exact: true })).toHaveValue("2");
-  await expect(dialog.getByRole("checkbox", { name: bookingAuthorization, exact: true })).toBeChecked();
-  await dialog.getByRole("button", { name: "Tomorrow", exact: true }).click();
-  await dialog.getByRole("button", { name: "Find available times", exact: true }).click();
+  await dialog.getByRole("button", { name: "Add hours", exact: true }).click();
+  await expect(dialog.getByLabel("Hours on day 1", { exact: true })).toHaveValue("");
+  await dialog.getByLabel("Hours on day 1", { exact: true }).fill("2");
+  await dialog.getByLabel("Work day 1", { exact: true }).fill("2026-09-10");
+  await dialog.getByRole("button", { name: "Review changes", exact: true }).click();
   await expect(dialog.getByRole("heading", { name: "This needs a decision" })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Confirm changes", exact: true })).toHaveCount(0);
   expect(context.fixture()).toEqual(context.before);
-  await dialog.getByRole("button", { name: "Today", exact: true }).click();
+  await dialog.getByLabel("Work day 1", { exact: true }).fill("2026-09-09");
   await expect(dialog.getByRole("heading", { name: "This needs a decision" })).toHaveCount(0);
-  await dialog.getByLabel("Work day", { exact: true }).scrollIntoViewIfNeeded();
+  await dialog.getByLabel("Work day 1", { exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: info.outputPath(`smart-fit-controls-${width}.png`) });
-  await dialog.getByRole("button", { name: "Find available times", exact: true }).click();
+  await dialog.getByRole("button", { name: "Review changes", exact: true }).click();
   await expect(dialog.getByRole("heading", { name: "This fits your schedule" })).toBeVisible();
   await expect(dialog.locator(".proposal-sessions")).toContainText("10:00 AM–12:00 PM");
   await expect(dialog.locator(".proposal-sessions")).not.toContainText("Existing protected work");
   expect(context.fixture()).toEqual(context.before);
   expect((await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations).toEqual([]);
   await dialog.locator(".session-manager").screenshot({ path: info.outputPath(`smart-fit-${width}.png`) });
-  expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   await dialog.getByRole("button", { name: "Confirm changes", exact: true }).click();
-  await expect(dialog.getByRole("button", { name: "Manage sessions", exact: true })).toBeVisible();
+  await expect(dialog.locator(".session-manager")).toHaveCount(0);
   const saved = context.fixture();
-  expect(saved.sessions.find(s => s.id === "protected-booking")).toEqual(context.before.sessions[0]);
-  expect(saved.items.find(i => i.id === "cedar-survey")).toMatchObject({ status: "planned", estimatedMinutes: null, remainingMinutes: null, windowStart: "2026-09-08", windowEnd: "2026-10-31" });
-  expect(saved.sessions.filter(s => s.workItemId === "cedar-survey").map(s => minutesBetween(s.start, s.end))).toEqual([120]);
+  expect(saved.sessions.find(session => session.id === "protected-booking")).toEqual(context.before.sessions[0]);
+  expect(saved.items.find(item => item.id === "cedar-survey")).toMatchObject({ status: "planned", estimatedMinutes: null, remainingMinutes: null, windowStart: "2026-09-08", windowEnd: "2026-10-31", timelineMode: "span" });
+  expect(saved.sessions.filter(session => session.workItemId === "cedar-survey").map(session => minutesBetween(session.start, session.end))).toEqual([120]);
   expect(context.actions).toEqual(["preview", "preview", "commit"]);
 });
 
-for (const width of [1440, 390]) for (const entry of ["Edit hours and days", "Manage sessions"]) test(`books three Friday hours after ${entry} on waiting unknown-total work at ${width}px`, async ({ page }, info) => {
+for (const width of [1440, 390]) for (const entry of ["Add hours", "Edit hours"]) test(`books three Friday hours after ${entry} on waiting unknown-total work at ${width}px`, async ({ page }, info) => {
   const context = await setup(page, width, true);
   const dialog = await openOngoingProject(page);
-  await dialog.getByRole("button", { name: entry, exact: true }).click();
-  await expect(dialog.getByRole("button", { name: /^Choose exact times/ })).toHaveAttribute("aria-pressed", "true");
-  await expect(dialog.getByRole("checkbox", { name: bookingAuthorization, exact: true })).toBeChecked();
-  await dialog.getByRole("button", { name: /^Find a time for me/ }).click();
-  await dialog.getByLabel("Work day", { exact: true }).fill("2026-09-11");
-  await dialog.getByLabel("Hours to book", { exact: true }).fill("3");
-  await expect(dialog.locator(".session-manager-budget")).toContainText("3h to book");
-  await expect(dialog.locator(".session-manager-budget")).toContainText("Project total stays unknown");
+  async function fillFriday() {
+    await dialog.getByRole("button", { name: entry, exact: true }).click();
+    if (entry === "Edit hours") await dialog.getByRole("button", { name: /^Add hours Book additional/ }).click();
+    await dialog.getByLabel("Work day 1", { exact: true }).fill("2026-09-11");
+    await dialog.getByLabel("Hours on day 1", { exact: true }).fill("3");
+    await expect(dialog.locator(".session-manager-budget")).toContainText("Project total stays unknown");
+  }
+  await fillFriday();
   expect(context.actions).toEqual([]);
   expect(context.fixture()).toEqual(context.before);
-
-  await dialog.getByRole("button", { name: "Find available times", exact: true }).click();
+  await dialog.getByRole("button", { name: "Review changes", exact: true }).click();
   await expect(dialog.getByRole("heading", { name: "This fits your schedule" })).toBeVisible();
   await expect(dialog.locator(".proposal-status-changes")).toContainText("Waiting → Planned");
   await expect(dialog.locator(".proposal-sessions")).toContainText("9:00 AM–12:00 PM");
   expect(context.actions).toEqual(["preview"]);
   expect(context.fixture()).toEqual(context.before);
   await dialog.getByRole("button", { name: "Cancel edits", exact: true }).click();
-  await expect(dialog.getByRole("button", { name: entry, exact: true })).toBeVisible();
+  await expect(dialog.locator(".session-manager")).toHaveCount(0);
   expect(context.fixture()).toEqual(context.before);
-  expect(context.fixture().items.find(item => item.id === "cedar-survey")?.status).toBe("waiting");
-
-  await dialog.getByRole("button", { name: entry, exact: true }).click();
-  await dialog.getByRole("button", { name: /^Find a time for me/ }).click();
-  await dialog.getByLabel("Work day", { exact: true }).fill("2026-09-11");
-  await dialog.getByLabel("Hours to book", { exact: true }).fill("3");
-  await dialog.getByRole("button", { name: "Find available times", exact: true }).click();
+  await fillFriday();
+  await dialog.getByRole("button", { name: "Review changes", exact: true }).click();
   await expect(dialog.getByRole("heading", { name: "This fits your schedule" })).toBeVisible();
-  await expect(dialog.locator(".proposal-status-changes")).toContainText("Waiting → Planned");
   expect(context.fixture()).toEqual(context.before);
   expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
-  if (entry === "Edit hours and days") {
+  if (entry === "Edit hours") {
     expect((await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations).toEqual([]);
     await dialog.locator(".session-manager").screenshot({ path: info.outputPath(`waiting-friday-preview-${width}.png`) });
-    await dialog.locator(".proposal-status-changes").scrollIntoViewIfNeeded();
-    await page.screenshot({ path: info.outputPath(`waiting-friday-confirmation-${width}.png`) });
   }
   await dialog.getByRole("button", { name: "Confirm changes", exact: true }).click();
-  await expect(dialog.getByRole("button", { name: "Manage sessions", exact: true })).toBeVisible();
+  await expect(dialog.locator(".session-manager")).toHaveCount(0);
   const saved = context.fixture();
-  expect(saved.items.find(item => item.id === "cedar-survey")).toMatchObject({
-    status: "planned", blockedReason: null, estimatedMinutes: null, remainingMinutes: null,
-    forecastDate: null, windowStart: "2026-09-08", windowEnd: "2026-10-31", completedAt: null,
-  });
+  expect(saved.items.find(item => item.id === "cedar-survey")).toMatchObject({ status: "planned", blockedReason: null, estimatedMinutes: null, remainingMinutes: null, forecastDate: null, windowStart: "2026-09-08", windowEnd: "2026-10-31", completedAt: null });
   const booked = saved.sessions.filter(session => session.workItemId === "cedar-survey");
-  expect(booked.reduce((minutes, session) => minutes + minutesBetween(session.start, session.end), 0)).toBe(180);
+  expect(booked.reduce((sum, session) => sum + minutesBetween(session.start, session.end), 0)).toBe(180);
   expect(booked.every(session => localDate(session.start, saved.settings.timeZone) === "2026-09-11")).toBe(true);
   expect(saved.sessions.filter(session => session.workItemId !== "cedar-survey")).toEqual(context.before.sessions);
-  expect(saved.settings).toEqual(context.before.settings);
-  expect(context.actions).toEqual(["preview", "preview", "commit"]);
 });
 
-for (const width of [1440, 390]) test(`keeps an explicit waiting choice when switching booking modes at ${width}px`, async ({ page }) => {
-  const context = await setup(page, width, true);
+for (const width of [1440, 390]) test(`switching booking editors preserves drafts without resuming waiting work at ${width}px`, async ({ page }) => {
+  const context = await setup(page, width);
   const dialog = await openOngoingProject(page);
-  await dialog.getByRole("button", { name: "Edit hours and days", exact: true }).click();
-  const authorization = dialog.getByRole("checkbox", { name: bookingAuthorization, exact: true });
-  await expect(authorization).toBeChecked();
-  await authorization.uncheck();
-  await dialog.getByRole("button", { name: /^Find a time for me/ }).click();
-  await expect(authorization).not.toBeChecked();
-  await dialog.getByRole("button", { name: /^Choose exact times/ }).click();
-  await expect(authorization).not.toBeChecked();
-  await dialog.getByRole("button", { name: /^Find a time for me/ }).click();
-  await dialog.getByLabel("Work day", { exact: true }).fill("2026-09-11");
-  await dialog.getByLabel("Hours to book", { exact: true }).fill("3");
-  await dialog.getByRole("button", { name: "Find available times", exact: true }).click();
-  await expect(dialog.getByRole("heading", { name: "This needs a decision" })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Confirm changes", exact: true })).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Add hours", exact: true }).click();
+  await dialog.getByLabel("Hours on day 1", { exact: true }).fill("2");
+  await dialog.getByRole("button", { name: /^Edit hours Change or remove/ }).click();
+  await expect(dialog.getByLabel("Hours on day 1", { exact: true })).toHaveCount(0);
+  await dialog.getByRole("button", { name: /^Add hours Book additional/ }).click();
+  await expect(dialog.getByLabel("Hours on day 1", { exact: true })).toHaveValue("2");
+  await dialog.getByRole("button", { name: "Review changes", exact: true }).click();
+  await expect(dialog.locator(".proposal-status-changes")).toContainText("Waiting → Planned");
   expect(context.fixture()).toEqual(context.before);
-  expect(context.actions).toEqual(["preview"]);
+  await dialog.getByRole("button", { name: "Cancel edits", exact: true }).click();
+  expect(context.fixture().items.find(item => item.id === "cedar-survey")?.status).toBe("waiting");
 });
 
-test("new work clearly distinguishes total hours and hours each day", async ({ page }, info) => {
+test("new work distinguishes a total from independently chosen daily hours", async ({ page }, info) => {
   const context = await setup(page, 390);
   await page.getByRole("button", { name: "Add work", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel("What needs doing?").fill("Cedar school website");
   await dialog.getByRole("combobox", { name: "Work category", exact: true }).selectOption("web-build");
-  await expect(dialog.getByRole("button", { name: /Find a time for me Choose days/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(dialog.getByRole("button", { name: /^Total hours ADA fits/ })).toHaveAttribute("aria-pressed", "true");
   await dialog.getByLabel("Choose multiple days", { exact: true }).check();
   await dialog.getByLabel("First day", { exact: true }).fill("2026-09-14");
   await dialog.getByLabel("Last day", { exact: true }).fill("2026-09-18");
   await dialog.getByLabel("Hours to book", { exact: true }).fill("2");
   await expect(dialog.locator(".smart-fit-summary")).toContainText("2h to book total across these days");
-  await dialog.getByRole("combobox", { name: "Spread the hours", exact: true }).selectOption("per_day");
-  await expect(dialog.locator(".smart-fit-summary")).toContainText("10h to book");
-  await dialog.getByLabel("First day", { exact: true }).scrollIntoViewIfNeeded();
-  await page.screenshot({ path: info.outputPath("smart-fit-new-controls-mobile.png") });
+  await dialog.getByRole("button", { name: /^Days and hours Choose/ }).click();
+  await dialog.getByLabel("Work day 1", { exact: true }).fill("2026-09-14");
+  for (let index = 1; index <= 5; index++) {
+    if (index > 1) await dialog.getByRole("button", { name: "Add day", exact: true }).click();
+    await dialog.getByLabel(`Hours on day ${index}`, { exact: true }).fill("2");
+  }
+  await expect(dialog.locator(".day-hours-footer")).toContainText("10h across 5 days");
+  await expect(dialog.getByLabel("Minimum focus session", { exact: true })).toHaveCount(0);
   let release!: () => void;
   const hold = new Promise<void>(resolve => { release = resolve; });
   await page.route(`${origin}/api/commands`, async route => { await hold; await route.fallback(); });
-  await dialog.getByRole("button", { name: "Check schedule", exact: true }).click();
+  await dialog.getByRole("button", { name: "Review changes", exact: true }).click();
   await expect(dialog.getByLabel("What needs doing?")).toBeDisabled();
-  await expect(dialog.getByLabel("Hours each working day", { exact: true })).toBeDisabled();
+  await expect(dialog.getByLabel("Hours on day 5", { exact: true })).toBeDisabled();
   release();
   await expect(dialog.getByRole("heading", { name: "This fits your schedule" })).toBeVisible();
   await expect(dialog.locator(".proposal-sessions > div")).toHaveCount(5);
   await dialog.locator(".work-form").screenshot({ path: info.outputPath("smart-fit-new-mobile.png") });
   expect((await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations).toEqual([]);
   await dialog.getByRole("button", { name: "Confirm changes", exact: true }).click();
-  const saved = context.fixture();
-  const item = saved.items.find(i => i.title === "Cedar school website")!;
+  const saved = context.fixture(), item = saved.items.find(item => item.title === "Cedar school website")!;
   expect(item.remainingMinutes).toBe(600);
-  const sessions = saved.sessions.filter(s => s.workItemId === item.id);
-  expect(sessions.map(s => localDate(s.start, saved.settings.timeZone))).toEqual(["2026-09-14", "2026-09-15", "2026-09-16", "2026-09-17", "2026-09-18"]);
-  expect(sessions.map(s => minutesBetween(s.start, s.end))).toEqual([120, 120, 120, 120, 120]);
+  const sessions = saved.sessions.filter(session => session.workItemId === item.id);
+  expect(sessions.map(session => localDate(session.start, saved.settings.timeZone))).toEqual(["2026-09-14", "2026-09-15", "2026-09-16", "2026-09-17", "2026-09-18"]);
+  expect(sessions.map(session => minutesBetween(session.start, session.end))).toEqual([120, 120, 120, 120, 120]);
 });
 
-test("editing a project offers the same find-time shortcut without saving metadata", async ({ page }) => {
+test("editing project details offers the same add-hours shortcut without saving metadata", async ({ page }) => {
   const context = await setup(page, 1440);
-  await page.getByRole("button", { name: "All work", exact: true }).click();
-  await page.getByLabel("Search work").fill("Cedar survey");
-  await page.getByRole("button", { name: /Cedar survey Cedar Studio/ }).click();
-  await page.getByRole("dialog").getByRole("button", { name: "Edit work", exact: true }).click();
-  await page.getByRole("dialog", { name: "Edit work", exact: true }).getByRole("button", { name: "Find a time for me", exact: true }).click();
-  const fit = page.getByRole("dialog", { name: "Find time · Cedar survey", exact: true });
-  await expect(fit.getByLabel("Hours to book", { exact: true })).toHaveValue("2");
-  await fit.getByRole("button", { name: /^Choose exact times/ }).click();
-  await expect(fit.getByRole("button", { name: "Add session", exact: true })).toBeVisible();
-  await fit.getByRole("button", { name: /^Find a time for me/ }).click();
-  await expect(fit.getByLabel("Hours to book", { exact: true })).toHaveValue("2");
-  await fit.getByRole("button", { name: "Cancel edits", exact: true }).click();
+  const details = await openOngoingProject(page);
+  await details.getByRole("button", { name: "Edit details", exact: true }).click();
+  await page.getByRole("dialog", { name: "Edit details", exact: true }).getByRole("button", { name: "Add hours", exact: true }).click();
+  const form = page.getByRole("dialog", { name: "Add hours · Cedar survey", exact: true });
+  await expect(form.getByLabel("Hours on day 1", { exact: true })).toHaveValue("");
+  await form.getByLabel("Hours on day 1", { exact: true }).fill("2");
+  await form.getByText("Advanced", { exact: true }).click();
+  await form.getByLabel("Set exact times", { exact: true }).check();
+  await expect(form.getByRole("button", { name: "Add session", exact: true })).toBeVisible();
+  await form.getByLabel("Set exact times", { exact: true }).uncheck();
+  await expect(form.getByLabel("Hours on day 1", { exact: true })).toHaveValue("2");
+  await form.getByRole("button", { name: "Cancel edits", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Cedar survey", exact: true })).toBeVisible();
   expect(context.actions).toEqual([]);
   expect(context.fixture()).toEqual(context.before);
@@ -234,7 +216,7 @@ test("Ask ADA fits hours on an existing project after a short capacity follow-up
   const initial = await state(page.request);
   expect(initial.mode).toBe("demo");
   const date = futureDate(initial, 175);
-  const item = makeItem(initial, "E2E ongoing smart survey", { windowStart: date, windowEnd: date, targetDate: null, status: "waiting", estimatedMinutes: null, remainingMinutes: null, minimumSessionMinutes: 120 });
+  const item = makeItem(initial, "E2E ongoing smart survey", { windowStart: date, windowEnd: date, targetDate: null, status: "waiting", estimatedMinutes: null, remainingMinutes: null, timelineMode: "span", minimumSessionMinutes: 120 });
   await commit(page.request, await preview(page.request, [{ type: "create", item }]));
   const before = await state(page.request);
   await page.goto("/");

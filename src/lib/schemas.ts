@@ -18,6 +18,8 @@ export const workItemSchema = z.object({
   requesterId: idSchema.nullable(), requestedBy: z.string().max(120), priorityId: idSchema, requestedPriorityId: idSchema.nullable(),
   status: statusSchema, estimatedMinutes: minutes.nullable(), remainingMinutes: minutes.nullable(),
   windowStart: dateSchema, windowEnd: nullableDate, targetDate: nullableDate, deadline: nullableDate,
+  dateConstraints: z.object({ earliestStart: nullableDate, allowedDates: z.array(dateSchema).max(366) }).strict().optional(),
+  timelineMode: z.enum(["bookings", "span"]).optional(),
   forecastDate: nullableDate, completedAt: instantSchema.nullable(), blockedReason: z.string().max(2000).nullable(),
   minimumSessionMinutes: z.number().int().min(15).max(480).multipleOf(15), allowedDates: z.array(dateSchema).max(366),
   dailyPlan: dailyPlanSchema.optional(),
@@ -33,15 +35,23 @@ export const sessionSchema = z.object({
 const override = { overrideProtected: z.boolean().optional(), overrideDeadline: z.boolean().optional() };
 const blockSchema = z.object({ id: idSchema, title: z.string().trim().min(1).max(200), start: instantSchema, end: instantSchema, kind: z.enum(["meeting", "time_off"]) }).strict()
   .refine(block => !isInstant(block.start) || !isInstant(block.end) || Date.parse(block.end) > Date.parse(block.start), "Unavailable time must end after it starts.");
+export const bookingWindowSchema = z.object({
+  startDate: dateSchema, endDate: dateSchema,
+  dates: z.array(dateSchema).min(1).max(366).refine(dates => new Set(dates).size === dates.length, "Choose each booking date only once.").optional(),
+}).strict().refine(value => !isDate(value.startDate) || !isDate(value.endDate) ||
+  (value.endDate >= value.startDate && value.endDate <= addDays(value.startDate, 365)), "Choose an inclusive range of at most 366 days.")
+  .refine(value => !value.dates || value.dates.every(date => date >= value.startDate && date <= value.endDate), "Booking dates must fall inside the requested range.");
 export const smartFitRequestSchema = z.object({
   startDate: dateSchema, endDate: dateSchema,
+  dates: z.array(dateSchema).min(1).max(366).refine(dates => new Set(dates).size === dates.length, "Choose each booking date only once.").optional(),
   minutes: z.number().int().min(15).max(100_000).multipleOf(15),
   distribution: z.enum(["total", "per_day"]), resumeWaiting: z.boolean().optional(),
 }).strict().refine(value => !isDate(value.startDate) || !isDate(value.endDate) ||
   (value.endDate >= value.startDate && value.endDate <= addDays(value.startDate, 365)), "Choose an inclusive range of at most 366 days.")
+  .refine(value => !value.dates || value.dates.every(date => date >= value.startDate && date <= value.endDate), "Booking dates must fall inside the requested range.")
   .refine(value => value.distribution !== "per_day" || value.minutes <= 480, "Daily hours cannot exceed eight hours.");
 export const commandSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("create"), item: workItemSchema, sessions: z.array(sessionSchema).max(1000).optional(), smartFit: smartFitRequestSchema.optional(), urgent: z.boolean().optional(), ...override }).strict(),
+  z.object({ type: z.literal("create"), item: workItemSchema, sessions: z.array(sessionSchema).max(1000).optional(), smartFit: smartFitRequestSchema.optional(), bookingWindow: bookingWindowSchema.optional(), urgent: z.boolean().optional(), ...override }).strict(),
   z.object({ type: z.literal("fit"), itemId: idSchema, request: smartFitRequestSchema }).strict(),
   z.object({ type: z.literal("reorder_day"), date: dateSchema,
     sessionIds: z.array(idSchema).min(1).max(100).refine(ids => new Set(ids).size === ids.length, "Choose each existing session only once."),
@@ -54,6 +64,9 @@ export const commandSchema = z.discriminatedUnion("type", [
     sessionIds: z.array(idSchema).min(1).max(100).refine(ids => new Set(ids).size === ids.length, "Choose each existing session only once."),
   }).strict(),
   z.object({ type: z.literal("add_booking"), itemId: idSchema, request: smartFitRequestSchema }).strict(),
+  z.object({ type: z.literal("set_day_hours"), itemId: idSchema, days: z.array(z.object({ date: dateSchema, minutes: z.number().int().min(0).max(480).multipleOf(15) }).strict()).min(1).max(366)
+    .refine(days => new Set(days.map(day => day.date)).size === days.length, "Use each work day only once.")
+    .refine(days => days.reduce((total, day) => total + day.minutes, 0) <= 100_000, "Daily hours exceed the supported total."), overrideProtected: z.boolean().optional() }).strict(),
   z.object({ type: z.literal("update"), itemId: idSchema, patch: workItemSchema.partial(), ...override }).strict(),
   z.object({ type: z.literal("schedule"), itemId: idSchema, sessions: z.array(sessionSchema).max(1000).optional(), urgent: z.boolean().optional(), ...override }).strict(),
   z.object({ type: z.literal("move"), sessionId: idSchema, start: instantSchema, end: instantSchema, ...override }).strict(),

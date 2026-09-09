@@ -132,17 +132,19 @@ describe("same-day existing-session ordering", () => {
     expect(proposal.conflicts[0].code).toBe("forbidden"); expect(proposal.sessions).toEqual(snapshot.sessions);
   });
   it.each([
-    {allowedDates:["2026-09-10"]}, {deadline:"2026-09-08"}, {windowStart:"2026-09-10"}, {dailyPlan:[{date,minutes:30}]},
+    {dateConstraints:{earliestStart:null,allowedDates:["2026-09-10"]}}, {deadline:"2026-09-08"}, {dateConstraints:{earliestStart:"2026-09-10",allowedDates:[]}}, {dailyPlan:[{date,minutes:30}]},
   ])("revalidates project scheduling constraints without silently repairing them", patch => {
     const snapshot=state(); Object.assign(snapshot.items[0],patch);
     const proposal=reorder(snapshot); expect(proposal.status).toBe("infeasible"); expect(proposal.items).toEqual(snapshot.items); expect(proposal.sessions).toEqual(snapshot.sessions);
   });
-  it("does not invalidate a short final focus remainder by moving it before its larger session", () => {
+  it("permits short sessions anywhere in the order without focus limits", () => {
     const snapshot=state(); snapshot.items=[item("focus",180,{minimumSessionMinutes:120})];
     snapshot.sessions=[session("long","focus","09:00","11:00"),session("short","focus","11:00","12:00")];
     expect(validateSchedule(snapshot,now)).toEqual([]);
     const proposal=reorder(snapshot,["short","long"]);
-    expect(proposal.conflicts.some(c=>c.code==="focus_length")).toBe(true); expect(proposal.sessions).toEqual(snapshot.sessions);
+    expect(proposal.status).toBe("ready"); expect(validateSchedule({...snapshot,...proposal},now)).toEqual([]);
+    expect(proposal.sessions.find(session=>session.id==="short")?.start).toBe(at("09:00"));
+    expect(proposal.sessions.find(session=>session.id==="long")?.start).toBe(at("10:00"));
   });
   it("rejects other dates, missing records, malformed identifiers, duplicate IDs, and overrides outside this capability", () => {
     const snapshot=state(); snapshot.sessions[0].start=at("09:00","2026-09-10"); snapshot.sessions[0].end=at("10:00","2026-09-10");

@@ -7,6 +7,7 @@ import type { AssistantDateSelection } from "@/lib/assistant-date-selection";
 import { addDays, dayOfWeek, instantFromMs, instantMs, localDate, localDateTime, minutesBetween } from "@/lib/time";
 import { dayCapacity } from "@/lib/scheduler";
 import { formatHours } from "@/lib/work";
+import { workTimeline } from "@/lib/work-timeline";
 import { dateLabel, Empty, timeLabel } from "./ui";
 import { calendarBookingMoveSourceUnavailableReason, type CalendarBookingMoveSelection } from "@/lib/calendar-booking-move";
 import { useCalendarBookingDrag } from "./use-calendar-booking-drag";
@@ -100,17 +101,13 @@ export function MonthCalendar({
       </div>
       {weeks.map((days, week) => {
         const visibleDates = (item: WorkItem) => {
-          const spanEnd =
-            item.windowEnd ||
-            item.forecastDate ||
-            item.targetDate ||
-            item.windowStart;
+          const timeline = workTimeline(item, state.sessions, state.settings.timeZone);
           const sessionDays = state.sessions
             .filter((s) => s.workItemId === item.id && s.status === "planned")
             .map((s) => localDate(s.start, state.settings.timeZone));
           return days.filter(
             (d) =>
-              (d >= item.windowStart && d <= spanEnd) ||
+              (timeline && d >= timeline.start && (!timeline.end || d <= timeline.end)) ||
               sessionDays.includes(d),
           );
         };
@@ -136,7 +133,7 @@ export function MonthCalendar({
         const spans = ribbons
           .sort(
             (a, b) =>
-              a.windowStart.localeCompare(b.windowStart) ||
+              (workTimeline(a, state.sessions, state.settings.timeZone)?.start ?? a.windowStart).localeCompare(workTimeline(b, state.sessions, state.settings.timeZone)?.start ?? b.windowStart) ||
               a.createdAt.localeCompare(b.createdAt),
           )
           .map((item) => {
@@ -279,12 +276,7 @@ export function MonthCalendar({
                             className={
                               minutes
                                 ? `ribbon-reserved ${draggable ? "booking-draggable" : ""}`
-                                : d >= item.windowStart &&
-                                    d <=
-                                      (item.windowEnd ||
-                                        item.forecastDate ||
-                                        item.targetDate ||
-                                        item.windowStart)
+                                : (() => { const timeline = workTimeline(item, state.sessions, state.settings.timeZone); return timeline && d >= timeline.start && (!timeline.end || d <= timeline.end); })()
                                   ? "ribbon-span"
                                   : "ribbon-gap"
                             }

@@ -18,6 +18,7 @@ export function newWorkItem(actor: Actor, date: string, patch: Partial<WorkItem>
     requestedPriorityId: actor.role === "requester" && patch.category === "it" ? defaultWorkPriority("it") : null,
     status: "planned", estimatedMinutes: 60, remainingMinutes: 60, windowStart: date,
     windowEnd: date, targetDate: null, deadline: null, forecastDate: null, completedAt: null,
+    dateConstraints: { earliestStart: null, allowedDates: [] }, timelineMode: patch.estimatedMinutes === null ? "span" : "bookings",
     blockedReason: null, minimumSessionMinutes: 15, allowedDates: [], checklist: [],
     progressTotal: null, progressCompleted: 0, updateDate: null, references: [], createdAt: now, updatedAt: now,
     ...patch,

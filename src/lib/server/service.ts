@@ -1,8 +1,8 @@
 import "server-only";
 import { cookies } from "next/headers";
-import { demoActor, demoEnabled, getDemoState, commitDemoProposal, submitDemoRequest, resolveDemoRequest, undoDemoEvent, mutateDemoAdmin, beginDemoAIOperation, finishDemoAIOperation, getDemoAIOperation } from "./demo-store";
+import { demoActor, demoEnabled, getDemoState, commitDemoProposal, submitDemoRequest, resolveDemoRequest, undoDemoEvent, mutateDemoAdmin, beginDemoAIOperation, finishDemoAIOperation, getDemoAIOperation, hasCommittedDemoOperation } from "./demo-store";
 import { getLiveActor } from "./auth";
-import { getLiveState, commitLiveProposal, submitLiveRequest, resolveLiveRequest, undoLiveEvent, mutateLiveAdmin, beginLiveAIOperation, finishLiveAIOperation, getLiveAIOperation } from "./live-store";
+import { getLiveState, commitLiveProposal, submitLiveRequest, resolveLiveRequest, undoLiveEvent, mutateLiveAdmin, beginLiveAIOperation, finishLiveAIOperation, getLiveAIOperation, hasCommittedLiveOperation } from "./live-store";
 
 export { demoEnabled };
 export async function currentActor() {
@@ -10,6 +10,7 @@ export async function currentActor() {
 }
 export const store = {
   getState: async (...args: Parameters<typeof getLiveState>) => demoEnabled() ? getDemoState(demoActor(args[0])) : getLiveState(...args),
+  hasCommittedOperation: async (...args: Parameters<typeof hasCommittedLiveOperation>) => demoEnabled() ? hasCommittedDemoOperation(...args) : hasCommittedLiveOperation(...args),
   commit: async (...args: Parameters<typeof commitLiveProposal>) => demoEnabled() ? commitDemoProposal(...args) : commitLiveProposal(...args),
   request: async (...args: Parameters<typeof submitLiveRequest>) => demoEnabled() ? submitDemoRequest(...args) : submitLiveRequest(...args),
   resolve: async (...args: Parameters<typeof resolveLiveRequest>) => demoEnabled() ? resolveDemoRequest(...args) : resolveLiveRequest(...args),

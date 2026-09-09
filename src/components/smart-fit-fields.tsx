@@ -19,8 +19,8 @@ export function SchedulingMode({ mode, onChange, disabled }: { mode: "smart" | "
   </div>;
 }
 
-export function SmartFitFields({ value, onChange, settings, disabled }: {
-  value: SmartFitDraft; onChange: (value: SmartFitDraft) => void; settings: WorkspaceSettings; disabled?: boolean;
+export function SmartFitFields({ value, onChange, settings, disabled, allowPerDay = true }: {
+  value: SmartFitDraft; onChange: (value: SmartFitDraft) => void; settings: WorkspaceSettings; disabled?: boolean; allowPerDay?: boolean;
 }) {
   const [range, setRange] = useState(value.startDate !== value.endDate);
   const today = localDate(new Date().toISOString(), settings.timeZone);
@@ -48,11 +48,11 @@ export function SmartFitFields({ value, onChange, settings, disabled }: {
       <Field label={value.distribution === "per_day" ? "Hours each working day" : "Hours to book"}>
         <input type="number" required min="0.25" max={value.distribution === "per_day" ? "8" : "1000"} step="0.25" value={value.hours} onChange={event => onChange({ ...value, hours: event.target.value })} />
       </Field>
-      {range && <Field label="Spread the hours"><select value={value.distribution} onChange={event => onChange({ ...value, distribution: event.target.value as SmartFitDraft["distribution"] })}>
+      {range && allowPerDay && <Field label="Spread the hours"><select value={value.distribution} onChange={event => onChange({ ...value, distribution: event.target.value as SmartFitDraft["distribution"] })}>
         <option value="total">Total across these days</option><option value="per_day">This many hours each working day</option>
       </select></Field>}
     </div>
     <p className="smart-fit-summary" aria-live="polite">{total === null ? "Choose your days and hours." : total === 0 ? "This range has no working days. Choose another day or range." : `${formatHours(total)} to book${value.distribution === "per_day" ? ` · ${value.hours}h on each working day` : range ? " total across these days" : " on this day"}.`} Existing bookings stay where they are.</p>
-    <p className="micro muted">ADA checks open time, lunch, and your minimum focus session. Nothing is booked outside these dates.</p>
+    <p className="micro muted">ADA uses available openings around lunch. Nothing is booked outside these dates.</p>
   </fieldset>;
 }

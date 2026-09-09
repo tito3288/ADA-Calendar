@@ -81,6 +81,18 @@ function visible(state: StoredState, actor: Actor): AppState {
 }
 export function getDemoState(actor: Actor) { return demoTransaction(state => visible(state, actor)); }
 
+/** Consult the complete ledger, independently of any event page shown in the UI. */
+export function hasCommittedDemoOperation(actor: Actor, operationId: string, commands: ScheduleProposal["commands"]): Promise<boolean> {
+  return demoTransaction(state => {
+    trustedActor(state, actor);
+    const prior = state.events.find(event => event.operationId === operationId);
+    if (!prior) return false;
+    if (prior.actorId !== actor.id || state.operationHashes?.[operationId] !== commandHash(commands))
+      throw new Error("That operation id does not match this account and its saved commands. Its saved work was not repeated.");
+    return true;
+  }, false);
+}
+
 function saveProposal(state: StoredState, actor: Actor, proposal: ScheduleProposal, type = "schedule_changed"): WorkEvent {
   trustedActor(state, actor);
   if (proposal.status !== "ready" || proposal.requiresApproval) throw new Error("This change needs approval or different scheduling dates.");

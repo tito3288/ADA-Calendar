@@ -16,6 +16,9 @@ export interface WorkItem {
   priorityId: string; requestedPriorityId: string | null; status: WorkStatus;
   estimatedMinutes: number | null; remainingMinutes: number | null;
   windowStart: string; windowEnd: string | null; targetDate: string | null; deadline: string | null;
+  /** Display dates do not constrain bookings. Only deliberately chosen limits do. */
+  dateConstraints?: { earliestStart: string | null; allowedDates: string[] };
+  timelineMode?: "bookings" | "span";
   forecastDate: string | null; completedAt: string | null; blockedReason: string | null;
   minimumSessionMinutes: number; allowedDates: string[]; checklist: ChecklistItem[];
   /** Exact remaining reservation budget on each date; omitted means flexible placement. */
@@ -34,21 +37,28 @@ export interface ScheduleSnapshot {
   workspaceId: string; version: number; settings: WorkspaceSettings; clients: Client[];
   priorities: Priority[]; items: WorkItem[]; sessions: WorkSession[]; blocks: UnavailableBlock[];
 }
+/** Dates for initial placement or owner review, never saved project restrictions. */
+export interface BookingWindow {
+  startDate: string; endDate: string; dates?: string[];
+}
 /** Additional reservations only; this is not an estimate of the whole project. */
 export interface SmartFitRequest {
   startDate: string; endDate: string; minutes: number;
+  /** Optional sparse dates for this booking operation only, never project limits. */
+  dates?: string[];
   distribution: "total" | "per_day"; resumeWaiting?: boolean;
 }
 export type WorkCommand =
-  | { type: "create"; item: WorkItem; sessions?: WorkSession[]; smartFit?: SmartFitRequest; urgent?: boolean; overrideProtected?: boolean; overrideDeadline?: boolean }
+  | { type: "create"; item: WorkItem; sessions?: WorkSession[]; smartFit?: SmartFitRequest; bookingWindow?: BookingWindow; urgent?: boolean; overrideProtected?: boolean; overrideDeadline?: boolean }
   | { type: "fit"; itemId: string; request: SmartFitRequest }
   /** Existing sessions only, in their requested chronological order on one day. */
   | { type: "reorder_day"; date: string; sessionIds: string[]; overrideProtected?: boolean }
   | { type: "resize_booking"; sessionId: string; minutes: number; overrideProtected?: boolean }
   | { type: "move_booking"; sessionId: string; date: string; minutes?: number; startTime?: string; overrideProtected?: boolean }
-  /** Move one month's booked project/day segment; every selected session stays whole. */
+  /** Move one project's booked day, splitting into openings while preserving its total. */
   | { type: "move_bookings"; sessionIds: string[]; date: string }
   | { type: "add_booking"; itemId: string; request: SmartFitRequest }
+  | { type: "set_day_hours"; itemId: string; days: { date: string; minutes: number }[]; overrideProtected?: boolean }
   | { type: "update"; itemId: string; patch: Partial<WorkItem>; overrideProtected?: boolean; overrideDeadline?: boolean }
   | { type: "schedule"; itemId: string; sessions?: WorkSession[]; urgent?: boolean; overrideProtected?: boolean; overrideDeadline?: boolean }
   | { type: "move"; sessionId: string; start: string; end: string; overrideProtected?: boolean; overrideDeadline?: boolean }

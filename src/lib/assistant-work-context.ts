@@ -46,7 +46,7 @@ export function projectSpanReplyEvidence(text: string): string | null {
   const words = normalized(text.split(/\b(?:and|but)\s+(?:(?:as|when|once)\s+)?(?:i|we)\b/i)[0]).split(" ");
   const allowed = new Set(("please add create book keep leave show set mark it this that the same task project work as waiting unscheduled with no estimate unknown hours total effort from to until till through thru starting start starts ending end ends of on for and between today tomorrow now current next month months year january february march april may june july august september october november december rest remainder beginning first last day date dates is are should be sorry actually correction meant i instead only just use change make span spans timeline display by can you runs run continues continue").split(" "));
   if (!words.length || !words.every(word => allowed.has(word) || /^\d+(?:st|nd|rd|th)?$/.test(word))) return null;
-  if (!/\b(?:from|through|thru|until|till|to|between|rest|remainder|end|ending|span|timeline)\b/i.test(text)) return null;
+  if (!/\b(?:from|through|thru|until|till|to|between|rest|remainder|end|ending|span|timeline|months of)\b/i.test(text)) return null;
   if (!/\b(?:today|tomorrow|month|year|january|february|march|april|may|june|july|august|september|october|november|december|\d{4}-\d{2}-\d{2})\b/i.test(text)) return null;
   return text;
 }

@@ -6,7 +6,7 @@ vi.mock("server-only", () => ({}));
 vi.mock("./server/auth", () => ({ assertLiveActor: mocks.authenticate, requireOwner: vi.fn() }));
 vi.mock("./server/supabase", () => ({ getSupabaseAdminClient: mocks.admin, getSupabaseServerClient: mocks.server }));
 
-import { beginLiveAIOperation, finishLiveAIOperation, getLiveAIOperation } from "./server/live-store";
+import { beginLiveAIOperation, finishLiveAIOperation, getLiveAIOperation, hasCommittedLiveOperation } from "./server/live-store";
 
 const supplied: Actor = { id: "caller-supplied-id", name: "Caller", email: "caller@example.test", role: "owner" };
 const authenticated: Actor = { id: "verified-auth-id", name: "William", email: "william@example.test", role: "requester" };
@@ -23,6 +23,40 @@ beforeEach(() => {
   mocks.select.mockReturnValue(query);
   mocks.eq.mockReturnValue(query);
   mocks.maybeSingle.mockResolvedValue({ data: { kind: "assistant", status: "completed", result: { interpretation: { kind: "clarification", message: "How many hours?" }, continuation: { turns: [] } } }, error: null });
+});
+
+describe("authenticated committed-operation lookup", () => {
+  const commands = [{ type: "status" as const, itemId: "fixture-work", status: "waiting" as const }];
+  const membership = { data: { workspace_id: "verified-workspace" }, error: null };
+  it("reads an exact event independently of history pagination and binds its actor and canonical commands", async () => {
+    mocks.maybeSingle.mockResolvedValueOnce(membership).mockResolvedValueOnce({ data: { actor_id: authenticated.id, operation_payload: [{ status: "waiting", itemId: "fixture-work", type: "status" }] }, error: null });
+    expect(await hasCommittedLiveOperation(supplied, "older-committed-operation", commands)).toBe(true);
+    expect(mocks.authenticate).toHaveBeenCalledWith(supplied);
+    expect(mocks.authenticate.mock.invocationCallOrder[0]).toBeLessThan(mocks.server.mock.invocationCallOrder[0]);
+    expect(mocks.from.mock.calls).toEqual([["workspace_members"], ["work_events"]]);
+    expect(mocks.eq).toHaveBeenCalledWith("workspace_id", "verified-workspace");
+    expect(mocks.eq).toHaveBeenCalledWith("operation_id", "older-committed-operation");
+    expect(mocks.admin).not.toHaveBeenCalled(); expect(mocks.rpc).not.toHaveBeenCalled();
+  });
+  it("returns false only when the authenticated workspace has no matching committed operation", async () => {
+    mocks.maybeSingle.mockResolvedValueOnce(membership).mockResolvedValueOnce({ data: null, error: null });
+    expect(await hasCommittedLiveOperation(supplied, "uncommitted-operation", commands)).toBe(false);
+  });
+  it.each([
+    { actor_id: "another-actor", operation_payload: commands },
+    { actor_id: authenticated.id, operation_payload: [] },
+  ])("rejects mismatched ledger identity or commands: %j", async entry => {
+    mocks.maybeSingle.mockResolvedValueOnce(membership).mockResolvedValueOnce({ data: entry, error: null });
+    await expect(hasCommittedLiveOperation(supplied, "reused-operation", commands)).rejects.toThrow(/saved commands/);
+  });
+  it("does not mistake auth or database failures for an uncommitted operation", async () => {
+    mocks.authenticate.mockRejectedValueOnce(new Error("Sign in required"));
+    await expect(hasCommittedLiveOperation(supplied, "old-operation", commands)).rejects.toThrow(/Sign in/);
+    expect(mocks.server).not.toHaveBeenCalled();
+    mocks.maybeSingle.mockResolvedValueOnce(membership).mockResolvedValueOnce({ data: null, error: { message: "Ledger unavailable" } });
+    await expect(hasCommittedLiveOperation(supplied, "old-operation", commands)).rejects.toThrow(/Ledger unavailable/);
+    expect(mocks.admin).not.toHaveBeenCalled();
+  });
 });
 
 describe("trusted AI accounting boundary", () => {

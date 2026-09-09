@@ -18,7 +18,7 @@ function capacityFixture(): AppState {
     { id: "maple-author", clientId: "maple", title: "Author page feedback", windowStart: "2026-09-04", windowEnd: "2026-10-02" },
     { id: "cedar-landing", clientId: "cedar", title: "Landing page concept", windowStart: "2026-09-07", windowEnd: "2026-09-24" },
   ].map(project => newWorkItem(fixture.actor, project.windowStart, {
-    ...project, status: "waiting", blockedReason: "Awaiting sample client feedback", estimatedMinutes: 240, remainingMinutes: 240,
+    ...project, timelineMode: "span", status: "waiting", blockedReason: "Awaiting sample client feedback", estimatedMinutes: 240, remainingMinutes: 240,
   }));
   const session = (id: string, date: string, start: string, end: string, workItemId = item.id): WorkSession => ({
     id, workItemId, start: localDateTime(date, start, fixture.settings.timeZone), end: localDateTime(date, end, fixture.settings.timeZone),

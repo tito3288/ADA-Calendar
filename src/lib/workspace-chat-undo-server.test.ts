@@ -68,12 +68,12 @@ describe("undoing an existing-project chat booking change",()=>{
     expect((await send("undo",{id:saved.events[0].id})).status).toBe(200);const undone=await getDemoState(owner);
     expect(undone.items).toEqual(before.items);expect(undone.sessions).toEqual(before.sessions);expect(undone.items[0].remainingMinutes).toBeNull();
   });
-  it("restores changed daily quotas and originally implicit short-remainder metadata",async()=>{
+  it("restores changed daily quotas without adding obsolete focus metadata",async()=>{
     await demoTransaction(state=>{state.items[0].dailyPlan=[{date,minutes:120}];});
     const before=await getDemoState(owner),saved=await save(transfer);expect(saved.items[0].dailyPlan).toEqual([{date,minutes:60},{date:next,minutes:60}]);
     expect((await send("undo",{id:saved.events[0].id})).status).toBe(200);expect((await getDemoState(owner)).items).toEqual(before.items);
     await demoTransaction(state=>{state.items[0].dailyPlan=undefined;state.items[0].remainingMinutes=180;state.items[0].estimatedMinutes=180;state.sessions.push({...state.sessions[0],id:"short-remainder",start:at("11:00"),end:at("12:00")});});
-    const original=await getDemoState(owner),shortened=await save(resize,"short-remainder-resize");expect(shortened.sessions.find(s=>s.id==="short-remainder")?.focusOverrideMinutes).toBe(60);
+    const original=await getDemoState(owner),shortened=await save(resize,"short-remainder-resize");expect(shortened.sessions.find(s=>s.id==="short-remainder")?.focusOverrideMinutes).toBeUndefined();
     expect((await send("undo",{id:shortened.events[0].id})).status).toBe(200);expect((await getDemoState(owner)).sessions).toEqual(original.sessions);
   });
   it("preserves a personal note saved after the booking change",async()=>{

@@ -30,7 +30,7 @@ describe("fixed meetings and work capacity", () => {
     const occupied = { ...base, blocks: reserved.blocks };
     expect(dayCapacity(occupied, tomorrow)).toEqual({ plannedMinutes: 0, capacityMinutes: 390, availableMinutes: 390 });
     const work = newWorkItem(owner, tomorrow, { id: "work", clientId: "client", title: "Fictional work", estimatedMinutes: 450, remainingMinutes: 450, minimumSessionMinutes: 15 });
-    const proposal = planCommands(occupied, [{ type: "create", item: work }], owner, { now });
+    const proposal = planCommands(occupied, [{ type: "create", item: work, smartFit: { startDate: tomorrow, endDate: "2026-09-11", minutes: 450, distribution: "total" } }], owner, { now });
     expect(proposal.status).toBe("ready");
     expect(proposal.blocks).toEqual([meeting()]);
     expect(minutes(proposal.sessions)).toBe(450);
@@ -80,7 +80,7 @@ describe("fixed meetings and work capacity", () => {
 
   it("keeps a firm deadline atomic when a meeting leaves insufficient capacity", () => {
     const base = snapshot([session()]);
-    base.items[0] = { ...base.items[0], deadline: tomorrow };
+    base.items[0] = { ...base.items[0], deadline: tomorrow, dateConstraints: { earliestStart: tomorrow, allowedDates: [] } };
     const proposal = planCommands(base, [{ type: "block", block: meeting({ start: at("09:00"), end: at("17:00") }) }], owner, { now });
     expect(proposal.status).toBe("infeasible");
     expect(proposal.conflicts[0].code).toBe("firm_deadline");

@@ -118,7 +118,7 @@ test("a reviewed client meeting reduces capacity and new smart-fit work uses the
   await work.getByLabel("What needs doing?", { exact: true }).fill("Fictional work around the client meeting");
   await work.getByLabel("Work day", { exact: true }).fill(date);
   await work.getByLabel("Hours to book", { exact: true }).fill("2");
-  await work.getByRole("button", { name: "Check schedule", exact: true }).click();
+  await work.getByRole("button", { name: "Review changes", exact: true }).click();
   await expect(work.getByRole("heading", { name: "This fits your schedule", exact: true })).toBeVisible();
   expect(schedule(await state(page.request))).toEqual(schedule(saved));
   await work.getByRole("button", { name: "Confirm changes", exact: true }).click();
@@ -253,6 +253,9 @@ test("moving protected work for a meeting requires an explicit override and a re
   const before = await state(page.request), date = emptyFutureDay(before, 357);
   const protectedWork = makeItem(before, "Fictional protected client delivery", {
     windowStart: date, windowEnd: date, estimatedMinutes: 120, remainingMinutes: 120,
+    // This delivery is explicitly unavailable before this day; display dates
+    // alone no longer impose that restriction during an approved replan.
+    dateConstraints: { earliestStart: date, allowedDates: [] },
   });
   const protectedSession = { ...exactSession(before, protectedWork, "09:00", "11:00"), protected: true };
   const otherWork = makeItem(before, "Fictional unchanged afternoon work", {

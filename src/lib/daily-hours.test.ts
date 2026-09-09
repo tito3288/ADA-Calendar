@@ -48,14 +48,16 @@ describe("grounded daily hours", () => {
   it.each(["one and a half hours each day", "an hour and a half each day"])("does not misread the fraction in %s", phrase => {
     expect(dailyHoursPlan(phrase,dates[0],dates[4],[],[1,2,3,4,5]).total).toBe(450);
   });
-  it("replaces the daily plan on an existing unknown-total project without inventing an estimate", () => {
+  it("sets each selected day's hours on an existing unknown-total project without inventing an estimate", () => {
     const state = base(); state.items = [work({ dailyPlan: undefined, estimatedMinutes: null, remainingMinutes: null })]; state.sessions = [session("old",dates[0],"09:00","10:00")];
     const text = "Schedule Cedar Studio Cedar website for two hours each selected day.";
     const interpreted = compileInterpretation({ kind: "commands", message: "Prepared", draft: null, actions: [{ ...emptyAssistantAction("schedule",text), clientName: "Cedar Studio", itemReference: "Cedar website" }] }, text, state, owner, new Date(now), text, [], selected);
     expect(interpreted.kind, interpreted.message).toBe("commands");
+    expect(interpreted.commands).toEqual([{ type: "set_day_hours", itemId: "cedar-build", days: dates.map(date => ({ date, minutes: 120 })) }]);
     const proposal = planCommands(state, interpreted.commands, owner, { now });
     expect(proposal.status, JSON.stringify(proposal.conflicts)).toBe("ready");
-    expect(proposal.sessions).toHaveLength(5); expect(proposal.items[0].remainingMinutes).toBeNull();
+    expect(dates.map(date => proposal.sessions.filter(session => localDate(session.start, zone) === date).reduce((sum, session) => sum + minutesBetween(session.start, session.end), 0))).toEqual([120, 120, 120, 120, 120]);
+    expect(proposal.items[0].remainingMinutes).toBeNull();
   });
   it.each(["2 hours each day, 8 hours total", "2 hours each day which would equal 8 hours", "spread 1 hour evenly", "two hours each day and three hours every day", "not two hours each day"])("clarifies %s", phrase => expect(interpret(phrase).kind).toBe("clarification"));
   it("preserves unknown overall effort and books explicit daily amounts", () => {

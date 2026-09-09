@@ -1,3 +1,4 @@
+import { pendingBookingCommands } from "@/lib/pending-bookings";
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { z } from "zod";
@@ -150,7 +151,7 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
       const input = z.object({ id: idSchema, decision: z.enum(["approved", "declined", "needs_information"]), note: z.string().max(5000).optional(), commands: z.array(commandSchema).min(1).max(30).optional(), preview: z.boolean().optional(), baseVersion: z.number().int().nonnegative().optional(), reviewFingerprint: reviewFingerprintSchema.optional() }).strict().parse(await json(req));
       const request = state.requests.find(r => r.id === input.id);
       if (!request) throw new Error("Request not found.");
-      const commands = (input.commands ?? request.proposal.commands).map(command => command.type === "create" ? { ...command, item: { ...command.item, requesterId: request.requesterId, requestedBy: request.requesterName } } : command);
+      const commands = (input.commands ?? pendingBookingCommands(request, state.settings.timeZone, state.settings.weekdays)).map(command => command.type === "create" ? { ...command, item: { ...command.item, requesterId: request.requesterId, requestedBy: request.requesterName } } : command);
       const proposal = withReviewFingerprint(planCommands(state, commands, actor, { operationId: `approve-${input.id}`, approveDisplacement: true }));
       if (input.preview) return NextResponse.json({ state, proposal });
       if (input.decision === "approved" && input.baseVersion !== state.version) return NextResponse.json({ error: "The schedule changed. Review a fresh preview before approving.", state, proposal }, { status: 409 });
@@ -235,7 +236,7 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
             const conflict = fitConflict ?? dailyConflict;
             if (conflict) interpretation = { ...interpretation, kind: "clarification", commands: [], message: conflict.message };
           }
-          await store.finishAI(actor, input.operationId, { interpretation, continuation: nextContinuation(input.text, interpretation, now, continuation, dateSelection) }, demoEnabled() ? undefined : interpretation.usage?.costUsd);
+          await store.finishAI(actor, input.operationId, { interpretation, scheduleSemantics: "days-hours-v1", continuation: nextContinuation(input.text, interpretation, now, continuation, dateSelection) }, demoEnabled() ? undefined : interpretation.usage?.costUsd);
         } catch (error) {
           await store.finishAI(actor, input.operationId, null, undefined, "The AI request did not complete. Its budget reservation was retained.");
           throw error;
@@ -246,8 +247,12 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
       let proposal;
       if (interpretation.kind === "commands") {
         const commands = z.array(commandSchema).min(1).max(30).parse(interpretation.commands) as WorkCommand[];
+        const committed = operation.status === "completed" && await store.hasCommittedOperation(actor, input.operationId, commands);
+        if (operation.status === "completed" && (operation.result as { scheduleSemantics?: string }).scheduleSemantics !== "days-hours-v1" && !committed) {
+          return NextResponse.json({ error: "The calendar's scheduling rules have been updated. Submit this instruction again to review a fresh plan. Nothing has changed.", state }, { status: 409 });
+        }
         proposal = planCommands(state, commands, actor, { operationId: input.operationId, approveDisplacement: actor.role === "owner" });
-        if (state.events.some(event => event.operationId === input.operationId) || (proposal.status === "ready" && !proposal.requiresApproval)) state = await store.commit(actor, proposal);
+        if (committed || (proposal.status === "ready" && !proposal.requiresApproval)) state = await store.commit(actor, proposal);
       } else if (interpretation.kind === "email_draft" && interpretation.emailDraft) {
         if (actor.role !== "owner") throw new Error("Only Bryan can draft team update emails.");
         const draftId = `assistant-${createHash("sha256").update(`${actor.id}:${input.operationId}`).digest("hex")}`;

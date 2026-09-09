@@ -46,7 +46,7 @@ beforeEach(async () => {
   for (const key of ["OPENAI_API_KEY", "RESEND_API_KEY", "SUPABASE_SERVICE_ROLE_KEY", "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY"]) vi.stubEnv(key, "");
   const fixture = createDemoState();
   fixture.clients = [{ id: "fixture-client", name: "Fictional client", aliases: [] }];
-  fixture.items = [newWorkItem(owner, date, { id: "work", clientId: "fixture-client", title: "Fictional work", estimatedMinutes: 180, remainingMinutes: 180, minimumSessionMinutes: 15 })];
+  fixture.items = [newWorkItem(owner, date, { id: "work", clientId: "fixture-client", title: "Fictional work", estimatedMinutes: 180, remainingMinutes: 180, minimumSessionMinutes: 15, dateConstraints: { earliestStart: date, allowedDates: [] } })];
   fixture.sessions = [{ id: "work-session", workItemId: "work", start: at("09:00"), end: at("12:00"), status: "planned", protected: false, usesReserve: false }];
   fixture.settings.reserveMinutes = 0; fixture.blocks = []; fixture.events = []; fixture.notifications = []; fixture.requests = []; fixture.version = 0;
   await writeFile(path.join(directory, "ada-demo.json"), JSON.stringify(fixture), { mode: 0o600 });

@@ -74,14 +74,14 @@ describe("manual session drafts", () => {
     expect(proposal.sessions).toEqual([original]); expect(proposal.items[0].minimumSessionMinutes).toBe(120);
   });
 
-  it("keeps an explicit shorter-focus booking's split pieces valid without lowering project focus", () => {
+  it("keeps legacy focus on the original split piece without generating it for the new piece", () => {
     const original = { ...session("short", "2026-09-14", "09:00", "10:00"), focusOverrideMinutes: 60 };
     const rows = splitSessionDraft(sessionDraft(original, zone), zone, "second");
-    expect(rows.map(row => row.focusOverrideMinutes)).toEqual([30,30]);
+    expect(rows.map(row => row.focusOverrideMinutes)).toEqual([60, undefined]);
     const work = item({ estimatedMinutes: null, remainingMinutes: null, minimumSessionMinutes: 120 });
     const proposal = planCommands(base(work,[original]), sessionManagementCommands({item:work,original:[original],rows,zone,now}),owner,{now});
     expect(proposal.status,JSON.stringify(proposal.conflicts)).toBe("ready");
-    expect(proposal.sessions.map(row => row.focusOverrideMinutes)).toEqual([30,30]); expect(proposal.items[0].minimumSessionMinutes).toBe(120);
+    expect(proposal.sessions.map(row => row.focusOverrideMinutes)).toEqual([60, undefined]); expect(proposal.items[0].minimumSessionMinutes).toBe(120);
   });
   it("splits a block without changing its minutes, identity, or protection", () => {
     const original = session("old", "2026-09-14", "13:00", "17:00", true);
@@ -208,7 +208,7 @@ describe("manual session drafts", () => {
     const commands = sessionManagementCommands({ item: work, original, rows, zone, now });
     const proposal = planCommands(base(work, original), commands, owner, { now });
     expect(proposal.status, JSON.stringify(proposal.conflicts)).toBe("ready");
-    expect(proposal.sessions.map(row => row.focusOverrideMinutes)).toEqual([60, 60]);
+    expect(proposal.sessions.map(row => row.focusOverrideMinutes)).toEqual([undefined, undefined]);
     expect(proposal.items[0]).toMatchObject({ remainingMinutes: 240, estimatedMinutes: 240, minimumSessionMinutes: 120, forecastDate: null });
   });
 
@@ -221,31 +221,25 @@ describe("manual session drafts", () => {
     const commands = sessionManagementCommands({ item: work, original, rows, zone, now });
     const proposal = planCommands(base(work, original), commands, owner, { now });
     expect(proposal.status, JSON.stringify(proposal.conflicts)).toBe("ready");
-    expect(proposal.sessions.find(session => session.id === "remainder")).toEqual({ ...original[1], focusOverrideMinutes: 60 });
+    expect(proposal.sessions.find(session => session.id === "remainder")).toEqual(original[1]);
     expect(proposal.sessions).toHaveLength(change === "shorten" ? 2 : 1);
     expect(proposal.items[0]).toMatchObject({ estimatedMinutes: 180, remainingMinutes: 180, minimumSessionMinutes: 120, forecastDate: null });
-    expect(proposal.summary.some(message => message.includes("previously allowed shorter focus"))).toBe(true);
+    expect(proposal.summary.some(message => message.includes("focus"))).toBe(false);
     expect(validateSchedule({ ...base(work, original), sessions: proposal.sessions, items: proposal.items }, now)).toEqual([]);
     expect(original[1].focusOverrideMinutes).toBeUndefined();
   });
 
-  it("requires permission to preserve a protected remainder's shorter focus after releasing earlier time", () => {
+  it("keeps an unchanged protected short booking without demanding an unrelated override", () => {
     const work = item({ estimatedMinutes: 180, remainingMinutes: 180, minimumSessionMinutes: 120 });
     const original = [session("first", "2026-09-14"), session("remainder", "2026-09-14", "11:00", "12:00", true)];
     const rows = original.map(row => sessionDraft(row, zone));
     rows[0].end = "10:00";
-    const commands = sessionManagementCommands({ item: work, original, rows, zone, now });
-    const blocked = planCommands(base(work, original), commands, owner, { now });
-    expect(blocked.conflicts[0].code).toBe("protected_session");
-    expect(blocked.items).toEqual([work]);
-    expect(blocked.sessions).toEqual(original);
-    const authorized = sessionManagementCommands({ item: work, original, rows, zone, now, overrideProtected: true });
-    const proposal = planCommands(base(work, original), authorized, owner, { now });
+    const proposal = planCommands(base(work, original), sessionManagementCommands({ item: work, original, rows, zone, now }), owner, { now });
     expect(proposal.status, JSON.stringify(proposal.conflicts)).toBe("ready");
-    expect(proposal.sessions.find(session => session.id === "remainder")).toEqual({ ...original[1], focusOverrideMinutes: 60 });
+    expect(proposal.sessions.find(session => session.id === "remainder")).toEqual(original[1]);
   });
 
-  it("does not grandfather an already invalid short booking or change historical focus metadata", () => {
+  it("accepts existing shorter bookings and leaves historical metadata unchanged", () => {
     const work = item({ windowStart: "2026-09-07", estimatedMinutes: 180, remainingMinutes: 180, minimumSessionMinutes: 120 });
     const past = session("past", "2026-09-07", "11:00", "12:00", true);
     const original = [past, session("first", "2026-09-14"), session("remainder", "2026-09-14", "11:00", "12:00")];
@@ -255,7 +249,7 @@ describe("manual session drafts", () => {
     expect(proposal.sessions[0]).toEqual(past);
     const invalidOriginal = [original[2]];
     const invalid = planCommands(base(work, invalidOriginal), sessionManagementCommands({ item: work, original: invalidOriginal, rows: invalidOriginal.map(row => sessionDraft(row, zone)), zone, now }), owner, { now });
-    expect(invalid.conflicts[0].code).toBe("focus_length");
+    expect(invalid.status, JSON.stringify(invalid.conflicts)).toBe("ready");
     expect(invalid.sessions).toEqual(invalidOriginal);
   });
 
@@ -517,6 +511,7 @@ describe("manual session drafts", () => {
         zone,
         now,
       }),
-    ).toThrow("currently underway");
+    ).not.toThrow();
+    expect(() => sessionManagementCommands({ item: item(), original: [underway], rows: [{ ...sessionDraft(underway, zone), end: "10:00" }], zone, now })).toThrow("Past sessions are history");
   });
 });

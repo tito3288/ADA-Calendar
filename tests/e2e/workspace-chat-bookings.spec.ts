@@ -28,10 +28,10 @@ async function ask(page: Page, text: string) {
   await expect(page.getByLabel("Message ADA helper")).toBeEnabled();
 }
 
-for (const width of [1440, 390]) test(`shortens a booked build without reducing its estimate at ${width}px`, async ({ page }, info) => {
+for (const width of [1440, 390]) test(`changes a booked day's hours and remaining total while preserving the original estimate at ${width}px`, async ({ page }, info) => {
   await page.setViewportSize({ width, height: width < 500 ? 844 : 1000 });
   const context = await seed(page, width === 1440 ? 100 : 110);
-  await ask(page, `Reduce ${context.title} from 2 hours to 1 hour`);
+  await ask(page, `Set ${context.title} to 1 hour on ${context.date}`);
   const review = context.dialog.getByRole("region", { name: "Proposed schedule changes" });
   await expect(review, await context.dialog.innerText()).toBeVisible();
   await expect(review).toContainText("1h freed");
@@ -45,10 +45,10 @@ for (const width of [1440, 390]) test(`shortens a booked build without reducing 
   await expect(context.dialog.getByRole("log")).toContainText("Your schedule is updated");
   const saved = await state(page.request), booking = saved.sessions.find(session => session.id === context.sessions[0].id)!;
   expect(minutesBetween(booking.start, booking.end)).toBe(60);
-  expect(saved.items.find(item => item.id === context.item.id)).toMatchObject({ remainingMinutes: 120, estimatedMinutes: 120, minimumSessionMinutes: 120 });
+  expect(saved.items.find(item => item.id === context.item.id)).toMatchObject({ remainingMinutes: 60, estimatedMinutes: 120, minimumSessionMinutes: 120 });
   expect(saved.sessions.filter(session => session.workItemId !== context.item.id)).toEqual(context.saved.sessions.filter(session => session.workItemId !== context.item.id));
-  // The existing manual editor must preserve this deliberately partial booking,
-  // including its shorter-focus exception, without refilling released hours.
+  // The advanced manual editor must preserve the shorter booking without
+  // requiring a focus exception or refilling released hours.
   await context.dialog.getByRole("button", { name: "Close ADA helper" }).click();
   const menu = page.getByRole("button", { name: "Open navigation", exact: true });
   if (await menu.isVisible()) await menu.click();
@@ -56,17 +56,19 @@ for (const width of [1440, 390]) test(`shortens a booked build without reducing 
   await page.getByLabel("Search work").fill(context.title);
   await page.getByRole("button", { name: new RegExp(context.title) }).click();
   const details = page.getByRole("dialog", { name: context.title, exact: true });
-  await details.getByRole("button", { name: "Manage sessions", exact: true }).click();
+  await details.getByRole("button", { name: "Edit hours", exact: true }).click();
+  await details.getByText("Advanced", { exact: true }).click();
+  await details.getByLabel("Set exact times", { exact: true }).check();
   await details.getByLabel("Session 1 start", { exact: true }).fill("10:00");
   await details.getByLabel("Session 1 end", { exact: true }).fill("11:00");
-  await details.getByRole("button", { name: "Preview session changes", exact: true }).click();
+  await details.getByRole("button", { name: "Review changes", exact: true }).click();
   await expect(details.getByRole("heading", { name: "This fits your schedule" })).toBeVisible();
   await details.getByRole("button", { name: "Confirm changes", exact: true }).click();
-  await expect(details.getByRole("button", { name: "Manage sessions", exact: true })).toBeVisible();
+  await expect(details.getByRole("heading", { name: "Edit hours", exact: true })).toHaveCount(0);
   const manuallyMoved = (await state(page.request)).sessions.filter(session => session.workItemId === context.item.id);
   expect(manuallyMoved).toHaveLength(1);
   expect(minutesBetween(manuallyMoved[0].start, manuallyMoved[0].end)).toBe(60);
-  expect(manuallyMoved[0].focusOverrideMinutes).toBe(60);
+  expect(manuallyMoved[0].focusOverrideMinutes).toBeUndefined();
 });
 
 test("adds hours to an existing waiting project without turning them into its estimate", async ({ page }) => {
@@ -126,4 +128,25 @@ test("a failed destination never removes the original booking", async ({ page })
   await expect(context.dialog.getByRole("button", { name: "Confirm schedule changes" })).toHaveCount(0);
   await expect(context.dialog.getByRole("log")).toContainText(/fit|working|weekend|available/i);
   expect((await state(page.request)).sessions).toEqual(context.saved.sessions);
+});
+
+test("sets unequal hours across two days atomically, then removes one day without completing the project", async ({ page }) => {
+  const context = await seed(page, 170), target = futureDate(context.saved, 177);
+  await ask(page, `Set ${context.title} to 1 hour on ${context.date} and 2 hours on ${target}`);
+  const review = context.dialog.getByRole("region", { name: "Proposed schedule changes" });
+  await expect(review, await context.dialog.innerText()).toBeVisible();
+  expect((await state(page.request)).sessions).toEqual(context.saved.sessions);
+  await review.getByRole("button", { name: "Confirm schedule changes" }).click();
+  await expect(context.dialog.getByRole("log")).toContainText("Your schedule is updated");
+  let saved = await state(page.request);
+  const hours = (date: string) => saved.sessions.filter(session => session.workItemId === context.item.id && localDate(session.start, saved.settings.timeZone) === date).reduce((sum, session) => sum + minutesBetween(session.start, session.end), 0);
+  expect(hours(context.date)).toBe(60); expect(hours(target)).toBe(120);
+  expect(saved.items.find(item => item.id === context.item.id)).toMatchObject({ remainingMinutes: 180, estimatedMinutes: 120, status: "planned" });
+  await ask(page, `Set ${context.title} to 0 hours on ${context.date}`);
+  await expect(review, await context.dialog.innerText()).toBeVisible();
+  await review.getByRole("button", { name: "Confirm schedule changes" }).click();
+  await expect(review).toHaveCount(0);
+  saved = await state(page.request);
+  expect(hours(context.date)).toBe(0); expect(hours(target)).toBe(120);
+  expect(saved.items.find(item => item.id === context.item.id)).toMatchObject({ remainingMinutes: 120, estimatedMinutes: 120, status: "planned", completedAt: null });
 });

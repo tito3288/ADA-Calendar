@@ -34,42 +34,42 @@ function ready(snapshot:ScheduleSnapshot,proposal:ReturnType<typeof plan>) {
     windowStart:snapshot.items[0].windowStart,windowEnd:snapshot.items[0].windowEnd,description:snapshot.items[0].description,references:snapshot.items[0].references});
 }
 describe("explicit booking edits without project edits",()=>{
-  it("reduces a 2h build to1h without claiming completion, refilling it, or lowering project focus",()=>{
+  it("reduces a 2h build to1h without claiming completion, refilling it, or rewriting legacy focus metadata",()=>{
     const snapshot=state(), before=structuredClone(snapshot), proposal=plan(snapshot,resize(60)); ready(snapshot,proposal);
     expect(snapshot).toEqual(before); expect(proposal.sessions).toHaveLength(1);
-    expect(proposal.sessions[0]).toEqual({...snapshot.sessions[0],end:at("10:00"),focusOverrideMinutes:60});
+    expect(proposal.sessions[0]).toEqual({...snapshot.sessions[0],end:at("10:00")});
     expect(proposal.items[0]).toMatchObject({remainingMinutes:600,estimatedMinutes:600,status:"planned",minimumSessionMinutes:120,forecastDate:null});
     expect(proposal.summary.join(" ")).toContain("not completed work");
-    expect(proposal.summary.join(" ")).toContain("shorter focus");
+    expect(proposal.sessions[0].focusOverrideMinutes).toBeUndefined();
   });
   it("preserves all unrelated sessions and existing estimates on add",()=>{
     const snapshot=state(); snapshot.items.push(work({id:"other",title:"Other work",remainingMinutes:60,estimatedMinutes:60,minimumSessionMinutes:60}));
     snapshot.sessions.push(session("other","09:00","10:00",{workItemId:"other",start:at("09:00",next),end:at("10:00",next),protected:true}));
     const proposal=plan(snapshot,add()); ready(snapshot,proposal);
     expect(proposal.sessions.slice(0,2)).toEqual(snapshot.sessions); expect(proposal.items[1]).toEqual(snapshot.items[1]);
-    expect(proposal.sessions[2]).toMatchObject({start:at("10:00",next),end:at("11:00",next),focusOverrideMinutes:60});
+    expect(proposal.sessions[2]).toMatchObject({start:at("10:00",next),end:at("11:00",next)});
   });
   it("preserves a previously valid short final remainder when an earlier booking shrinks",()=>{
     const snapshot=state({estimatedMinutes:180,remainingMinutes:180}); snapshot.sessions.push(session("remainder","11:00","12:00"));
     expect(validateSchedule(snapshot,now)).toEqual([]);
     const proposal=plan(snapshot,resize(60)); ready(snapshot,proposal);
-    expect(proposal.sessions[1]).toEqual({...snapshot.sessions[1],focusOverrideMinutes:60});
-    expect(proposal.summary.join(" ")).toContain("originally allowed shorter focus");
+    expect(proposal.sessions[1]).toEqual({...snapshot.sessions[1]});
+    expect(proposal.sessions[1].focusOverrideMinutes).toBeUndefined();
     expect(proposal.items[0].remainingMinutes).toBe(180);
   });
-  it("does not grandfather an invalid source or protected untouched short remainder",()=>{
+  it("keeps short protected reservations unchanged without manufacturing focus metadata",()=>{
     const snapshot=state({estimatedMinutes:180,remainingMinutes:180}); snapshot.sessions.push(session("remainder","11:00","12:00",{protected:true}));
-    const protectedResult=plan(snapshot,resize(60)); expect(protectedResult.status).toBe("infeasible");
-    expect(protectedResult.conflicts[0].code).toBe("protected_session"); expect(protectedResult.sessions).toEqual(snapshot.sessions);
-    snapshot.sessions[1].protected=false; snapshot.items[0].remainingMinutes=240; snapshot.items[0].estimatedMinutes=240;
-    expect(validateSchedule(snapshot,now).some(error=>error.code==="focus_length")).toBe(true);
-    const invalid=plan(snapshot,resize(60)); expect(invalid.status).toBe("infeasible"); expect(invalid.sessions).toEqual(snapshot.sessions);
+    const proposal=plan(snapshot,resize(60)); ready(snapshot,proposal);
+    expect(proposal.sessions[1]).toEqual(snapshot.sessions[1]);
+    expect(proposal.sessions.every(session=>session.focusOverrideMinutes===undefined)).toBe(true);
+    snapshot.sessions[0].protected=true;
+    expect(plan(snapshot,resize(60)).conflicts[0].code).toBe("protected_session");
   });
   it("preserves unknown-total existing short bookings when adding a later booking on the same day",()=>{
     const snapshot=state({estimatedMinutes:null,remainingMinutes:null}); snapshot.sessions=[session("short","09:00","10:00")];
     expect(validateSchedule(snapshot,now)).toEqual([]);
     const proposal=plan(snapshot,add(120,date)); ready(snapshot,proposal);
-    expect(proposal.sessions[0]).toEqual({...snapshot.sessions[0],focusOverrideMinutes:60});
+    expect(proposal.sessions[0]).toEqual({...snapshot.sessions[0]});
     expect(proposal.items[0].remainingMinutes).toBeNull();
   });
   it("keeps a deliberate partial reservation when the existing manual move workflow is used later",()=>{
@@ -83,7 +83,7 @@ describe("explicit booking edits without project edits",()=>{
     expect(moved.items[0]).toMatchObject({remainingMinutes:240,minimumSessionMinutes:120,forecastDate:null});
   });
   it("rejects invalid explicit manual destinations without deleting or refilling a partial reservation",()=>{
-    const snapshot=state({allowedDates:[date]});
+    const snapshot=state({dateConstraints:{earliestStart:null,allowedDates:[date]}});
     const failed=plan(snapshot,{type:"move",sessionId:"one",start:at("09:00",next),end:at("11:00",next)});
     expect(failed.status).toBe("infeasible"); expect(failed.sessions).toEqual(snapshot.sessions);
   });
@@ -102,8 +102,8 @@ describe("explicit booking edits without project edits",()=>{
   });
   it("splits only explicitly transferred hours and retains the original source ID",()=>{
     const snapshot=state(),proposal=plan(snapshot,move(next,60)); ready(snapshot,proposal);
-    expect(proposal.sessions[0]).toMatchObject({id:"one",start:at("09:00"),end:at("10:00"),focusOverrideMinutes:60});
-    expect(proposal.sessions[1]).toMatchObject({workItemId:"build",start:at("09:00",next),end:at("10:00",next),focusOverrideMinutes:60});
+    expect(proposal.sessions[0]).toMatchObject({id:"one",start:at("09:00"),end:at("10:00")});
+    expect(proposal.sessions[1]).toMatchObject({workItemId:"build",start:at("09:00",next),end:at("10:00",next)});
     expect(proposal.sessions[1].id).not.toBe("one");
     expect(proposal.sessions.reduce((n,s)=>n+minutesBetween(s.start,s.end),0)).toBe(120);
     expect(plan(snapshot,move(next,60)).sessions).toEqual(proposal.sessions);
@@ -181,7 +181,7 @@ describe("explicit booking edits without project edits",()=>{
     const snapshot=state({remainingMinutes:240,estimatedMinutes:240,dailyPlan:[{date,minutes:240}]});
     const proposal=plan(snapshot,add()); expect(proposal.conflicts[0].code).toBe("daily_hours_total"); expect(proposal.items).toEqual(snapshot.items);
   });
-  it.each([{allowedDates:[date]},{deadline:date},{windowStart:"2026-09-11"}])("keeps earliest/allowed/deadline boundaries unchanged",patch=>{
+  it.each([{dateConstraints:{earliestStart:null,allowedDates:[date]}},{deadline:date},{dateConstraints:{earliestStart:"2026-09-11",allowedDates:[]}}])("keeps earliest/allowed/deadline boundaries unchanged",patch=>{
     const snapshot=state(patch); const failed=plan(snapshot,move()); expect(failed.conflicts[0].code).toBe("outside_allowed_dates"); expect(failed.sessions).toEqual(snapshot.sessions);
   });
   it("respects saved reserve capacity and never adopts reserve permission",()=>{
@@ -201,7 +201,7 @@ describe("explicit booking edits without project edits",()=>{
   it("preserves started/history work and never places new work into elapsed time",()=>{
     const snapshot=state(); expect(plan(snapshot,resize(60),at("09:01")).conflicts[0].code).toBe("historical_session");
     expect(plan(snapshot,move(),at("09:01")).conflicts[0].code).toBe("historical_session");
-    const future=plan(snapshot,add(60,date),at("11:07")); ready(snapshot,future); expect(future.sessions[1].start).toBe(at("12:30"));
+    const future=plan(snapshot,add(60,date),at("11:07")); ready(snapshot,future); expect(future.sessions[1].start).toBe(at("11:15")); expect(future.sessions[1].end).toBe(at("12:00")); expect(future.sessions[2].start).toBe(at("12:30"));
     snapshot.sessions[0].status="completed"; expect(plan(snapshot,resize(60)).conflicts[0].code).toBe("historical_session");
   });
   it.each(["requester","viewer"] as const)("rejects %s booking edits",role=>{

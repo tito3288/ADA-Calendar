@@ -15,7 +15,7 @@ vi.mock("./server/service", async () => {
   const demo = await import("./server/demo-store");
   return { currentActor: vi.fn(async () => DEMO_MEMBERS[0]), demoEnabled: () => true,
     store: { getState: vi.fn(async (id: string) => ({ ...await demo.getDemoState(demo.demoActor(id)), clients: [{ id: "cedar", name: "Cedar Studio", aliases: [] }], items: [], sessions: [], blocks: [], notifications: [], events: [], emailDrafts: [] })),
-      beginAI: vi.fn(demo.beginDemoAIOperation), finishAI: vi.fn(demo.finishDemoAIOperation), getAI: vi.fn(demo.getDemoAIOperation),
+      beginAI: vi.fn(demo.beginDemoAIOperation), finishAI: vi.fn(demo.finishDemoAIOperation), getAI: vi.fn(demo.getDemoAIOperation), hasCommittedOperation: vi.fn(demo.hasCommittedDemoOperation),
       commit: vi.fn(), admin: vi.fn(), request: vi.fn(), resolve: vi.fn(), undo: vi.fn() } };
 });
 import { currentActor, store } from "./server/service";

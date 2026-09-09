@@ -168,7 +168,9 @@ describe("natural waiting work and display spans (offline)", () => {
   it.each(["deadline", "targetDate", "updateDate", "allowedDates"] as const)("does not authorize %s from project-month language", field => {
     const text = `${client.name}. ${original}`;
     const patch = field === "allowedDates" ? { allowedDates: ["2026-10-31"] } : { [field]: "2026-10-31" };
-    expect(compile(text, patch).kind).toBe("clarification");
+    const result = compile(text, patch);
+    if (field === "deadline") expect(result.commands[0]).toMatchObject({ item: { deadline: null } });
+    else expect(result.kind).toBe("clarification");
   });
 
   it("rejects invented span endpoints instead of silently accepting them", () => {

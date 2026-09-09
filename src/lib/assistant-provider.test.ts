@@ -62,7 +62,7 @@ describe("Responses adapter follow-up context (mocked provider, no paid calls)",
     expect(result.commands).toHaveLength(1);
     expect(result.commands[0]).toMatchObject({ type: "create", item: {
       clientId: "test-cidwp", title: "Homepage demo", estimatedMinutes: 180,
-      windowStart: "2026-09-09", targetDate: "2026-09-09", deadline: "2026-09-09", allowedDates: ["2026-09-09"],
+      windowStart: "2026-09-09", targetDate: "2026-09-09", deadline: null, allowedDates: [],
     } });
     expect(state).toEqual(before);
     expect(provider.parse).toHaveBeenCalledTimes(1);

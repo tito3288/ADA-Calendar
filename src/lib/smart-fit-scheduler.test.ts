@@ -104,16 +104,33 @@ describe("append-only smart fit", () => {
     expect(proposal.items[0].dailyPlan).toEqual(snapshot.items[0].dailyPlan);
     expect(fit(snapshot).conflicts[0].code).toBe("smart_fit_capacity");
   });
-  it("clearly rejects a same-day addition that invalidates an existing short focus remainder, without changing it", () => {
+  it("adds same-day hours while retaining an existing short booking unchanged", () => {
     const snapshot = existing({ minimumSessionMinutes: 120 }); snapshot.sessions = [session("short-remainder","09:00","10:00")];
     expect(validateSchedule(snapshot,now)).toEqual([]);
     const proposal = fit(snapshot);
-    expect(proposal.conflicts[0]).toMatchObject({ code:"focus_length",message:expect.stringContaining("leaves existing sessions unchanged") });
-    expect(proposal.sessions).toEqual(snapshot.sessions); expect(proposal.items).toEqual(snapshot.items);
+    ready(snapshot,proposal); expect(proposal.sessions[0]).toEqual(snapshot.sessions[0]); expect(proposal.sessions).toHaveLength(2);
   });
 });
 
 describe("smart-fit dates and capacity", () => {
+  it.each(["create", "fit", "add_booking"] as const)("keeps sparse requested dates and their shared total without saving a date lock for %s", type => {
+    const snapshot = type === "create" ? state() : existing();
+    snapshot.blocks = [{ id: "monday-closed", title: "Fictional closure", start: at(day, "09:00"), end: at(day, "17:00"), kind: "time_off" }];
+    const bookingRequest = request({ endDate: addDays(day, 2), dates: [day, addDays(day, 2)], minutes: 120 });
+    const command: WorkCommand = type === "create"
+      ? { type, item: item({ estimatedMinutes: 120, remainingMinutes: 120 }), smartFit: bookingRequest }
+      : { type, itemId: "sample-work", request: bookingRequest };
+    const proposal = planCommands(snapshot, [command], owner, { now });
+    ready(snapshot, proposal);
+    expect(proposal.sessions.map(s => [localDate(s.start, DEFAULT_SETTINGS.timeZone), minutesBetween(s.start, s.end)]))
+      .toEqual([[addDays(day, 2), 120]]);
+    expect(proposal.items[0].allowedDates).toEqual([]);
+    expect(proposal.items[0].dateConstraints?.allowedDates ?? []).toEqual([]);
+    expect(proposal.items[0].remainingMinutes).toBe(type === "create" ? 120 : null);
+    const moved = planCommands({ ...snapshot, items: proposal.items, sessions: proposal.sessions }, [{ type: "move_bookings", sessionIds: proposal.sessions.map(s => s.id), date: addDays(day, 1) }], owner, { now });
+    ready(snapshot, moved);
+    expect(moved.sessions.map(s => localDate(s.start, DEFAULT_SETTINGS.timeZone))).toEqual([addDays(day, 1)]);
+  });
   it("spreads a total across the selected window, rather than repeating it", () => {
     const snapshot = existing();
     const proposal = fit(snapshot,{ minutes:600,endDate:addDays(day,1) });
@@ -147,12 +164,11 @@ describe("smart-fit dates and capacity", () => {
     const proposal=fit(snapshot);
     expect(proposal.conflicts[0].code).toBe("smart_fit_capacity"); expect(proposal.sessions).toEqual(snapshot.sessions);
   });
-  it("does not mistake fragmented free minutes for an uninterrupted focus block", () => {
+  it("splits hours between free openings despite legacy focus metadata", () => {
     const snapshot=existing({minimumSessionMinutes:120});
     snapshot.blocks=[{id:"am",title:"Morning meeting",start:at(day,"09:00"),end:at(day,"11:00"),kind:"meeting"},{id:"pm",title:"Afternoon meeting",start:at(day,"13:30"),end:at(day,"17:00"),kind:"meeting"}];
-    expect(fit(snapshot).conflicts[0].code).toBe("smart_fit_capacity");
-    snapshot.items[0].minimumSessionMinutes=60;
-    ready(snapshot,fit(snapshot));
+    const proposal=fit(snapshot); ready(snapshot,proposal);
+    expect(proposal.sessions.map(session=>minutesBetween(session.start,session.end))).toEqual([60,60]);
   });
   it("respects persisted reserve settings", () => {
     const snapshot=existing(); snapshot.settings.reserveMinutes=60;
@@ -166,13 +182,13 @@ describe("smart-fit dates and capacity", () => {
     expect(fit(snapshot,{distribution:"per_day",startDate:"2026-09-08"},now).status).toBe("infeasible");
   });
   it("enforces allowed dates, earliest start, and firm deadline without editing them", () => {
-    for (const patch of [{allowedDates:[addDays(day,1)]},{windowStart:addDays(day,1)},{deadline:addDays(day,-1)}]) {
+    for (const patch of [{dateConstraints:{earliestStart:null,allowedDates:[addDays(day,1)]}},{dateConstraints:{earliestStart:addDays(day,1),allowedDates:[]}},{deadline:addDays(day,-1)}]) {
       const snapshot=existing(patch); const proposal=fit(snapshot);
       expect(proposal.conflicts[0].code).toBe("outside_allowed_dates"); expect(proposal.items).toEqual(snapshot.items);
     }
   });
   it("does not book outside a narrow allowed date within a wider chosen range", () => {
-    const snapshot=existing({allowedDates:[addDays(day,1)]});
+    const snapshot=existing({dateConstraints:{earliestStart:null,allowedDates:[addDays(day,1)]}});
     const proposal=fit(snapshot,{endDate:addDays(day,2)}); ready(snapshot,proposal);
     expect(localDate(proposal.sessions[0].start,DEFAULT_SETTINGS.timeZone)).toBe(addDays(day,1));
     expect(fit(snapshot,{endDate:addDays(day,2),distribution:"per_day"}).conflicts[0].code).toBe("outside_allowed_dates");
@@ -183,21 +199,20 @@ describe("smart-fit dates and capacity", () => {
 });
 
 describe("new smart-fit work and validation", () => {
-  it("keeps a fully booked new task inside its chosen dates during later ordinary replanning", () => {
+  it("does not turn a new task's initial chosen dates into a permanent restriction", () => {
     const snapshot=state();
     const created=planCommands(snapshot,[{type:"create",item:item({estimatedMinutes:120,remainingMinutes:120}),smartFit:request({endDate:addDays(day,1)})}],owner,{now});
     ready(snapshot,created);
-    expect(created.items[0].allowedDates).toEqual([day,addDays(day,1)]);
+    expect(created.items[0].allowedDates).toEqual([]); expect(created.items[0].dateConstraints?.allowedDates ?? []).toEqual([]);
     const replanned=planCommands({...snapshot,items:created.items,sessions:created.sessions},[{type:"block",block:{id:"closed-range",title:"Fictional two-day closure",start:at(day,"09:00"),end:at(addDays(day,1),"17:00"),kind:"time_off"}}],owner,{now,approveDisplacement:true});
-    expect(replanned.status).toBe("infeasible");
-    expect(replanned.sessions).toEqual(created.sessions);
-    expect(replanned.blocks).toEqual([]);
+    ready(snapshot,replanned);
+    expect(replanned.sessions.every(session=>localDate(session.start,DEFAULT_SETTINGS.timeZone)<day||localDate(session.start,DEFAULT_SETTINGS.timeZone)>addDays(day,1))).toBe(true);
   });
-  it("intersects a full new task's chosen window with preexisting allowed dates", () => {
+  it("respects deliberate allowed dates during placement without narrowing the saved restriction", () => {
     const snapshot=state();
-    const proposal=planCommands(snapshot,[{type:"create",item:item({estimatedMinutes:120,remainingMinutes:120,allowedDates:[day,addDays(day,2),addDays(day,7)]}),smartFit:request({endDate:addDays(day,3)})}],owner,{now});
+    const proposal=planCommands(snapshot,[{type:"create",item:item({estimatedMinutes:120,remainingMinutes:120,dateConstraints:{earliestStart:null,allowedDates:[day,addDays(day,2),addDays(day,7)]}}),smartFit:request({endDate:addDays(day,3)})}],owner,{now});
     ready(snapshot,proposal);
-    expect(proposal.items[0].allowedDates).toEqual([day,addDays(day,2)]);
+    expect(proposal.items[0].dateConstraints?.allowedDates).toEqual([day,addDays(day,2),addDays(day,7)]);
   });
   it.each([{estimatedMinutes:null,remainingMinutes:null},{estimatedMinutes:600,remainingMinutes:600}])("does not turn an ongoing project's initial chunk into a permanent date restriction: %j", effort => {
     const snapshot=state();

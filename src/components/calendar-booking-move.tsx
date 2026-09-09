@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowDown, Check, LoaderCircle, RefreshCw, Undo2 } from "lucide-react";
+import { Check, LoaderCircle, RefreshCw, Undo2 } from "lucide-react";
 import type { AppState, ScheduleProposal, WorkEvent } from "@/lib/types";
 import { CALENDAR_MOVE_PREFIX, calendarBookingMovePreview, calendarBookingMoveSourceUnavailableReason, calendarBookingMoveTargetUnavailableReason, latestCalendarBookingMove, type CalendarBookingMoveSelection } from "@/lib/calendar-booking-move";
 import { undoUnavailableReason } from "@/lib/undo";
@@ -91,7 +91,7 @@ function CalendarBookingMoveController({ state, selection, onClose, onState, onI
     return invalidatePreview;
   }, [key, refreshPreview, invalidatePreview]);
 
-  function moveSucceeded(next: AppState, message = "Booked hours moved. Your project and total hours stayed the same.") {
+  function moveSucceeded(next: AppState, message = "Booked hours moved. The same total hours are booked on the new day.") {
     publish(next); moveOperation.current = null; setUncertain(null); setPreview(null); setError(""); setNotice(message); latest.current.onClose();
   }
   function undoSucceeded(next: AppState) {
@@ -178,18 +178,19 @@ function CalendarBookingMoveController({ state, selection, onClose, onState, onI
         <p className="eyebrow">PREVIEW · NOT SAVED</p>
         {busy === "preview" && <p role="status" className="calendar-booking-move-loading"><LoaderCircle size={17} />Finding a safe opening…</p>}
         {details && <>
-          <div className="calendar-booking-move-total"><strong>{hours(details.minutes)} · same booked hours</strong><span>{details.changes.length} session{details.changes.length === 1 ? "" : "s"} moved together</span></div>
-          <ol className="calendar-booking-move-changes">{details.changes.map(change => <li key={change.sessionId}><strong>{change.clientName} · {change.title}</strong>
-            <span>{fullDate(localDate(change.beforeStart, state.settings.timeZone))} · {timeLabel(change.beforeStart, state.settings.timeZone)}–{timeLabel(change.beforeEnd, state.settings.timeZone)} · {hours(change.minutes)}</span>
-            <ArrowDown size={14} aria-label="moves to" />
-            <b>{fullDate(localDate(change.afterStart, state.settings.timeZone))} · {timeLabel(change.afterStart, state.settings.timeZone)}–{timeLabel(change.afterEnd, state.settings.timeZone)} · {hours(change.minutes)}</b></li>)}</ol>
+          <div className="calendar-booking-move-total"><strong>{hours(details.minutes)} · same booked hours</strong><span>{details.after.length} work block{details.after.length === 1 ? "" : "s"} on the new day</span></div>
+          <strong>{details.clientName} · {details.title}</strong>
+          <div className="form-grid calendar-booking-move-changes">
+            <section><h3>Before</h3>{details.before.map(session => <p key={session.id}>{fullDate(localDate(session.start, state.settings.timeZone))} · {timeLabel(session.start, state.settings.timeZone)}–{timeLabel(session.end, state.settings.timeZone)}</p>)}</section>
+            <section><h3>After</h3>{details.after.map(session => <p key={session.id}>{fullDate(localDate(session.start, state.settings.timeZone))} · {timeLabel(session.start, state.settings.timeZone)}–{timeLabel(session.end, state.settings.timeZone)}</p>)}</section>
+          </div>
           <div className="calendar-booking-move-capacity" aria-label="Daily capacity after this move">{details.days.map(day => <div key={day.date}><strong>{dateLabel(day.date)}</strong><span>{hours(day.before.availableMinutes)} → {hours(day.after.availableMinutes)} left</span><small>{hours(day.after.plannedMinutes)} planned · {hours(day.after.capacityMinutes)} capacity</small></div>)}</div>
         </>}
         {reviewed && <ul className="calendar-booking-move-summary">{reviewed.proposal.summary.map((line, index) => <li key={index}>{line}</li>)}</ul>}
         {!!reviewed?.proposal.conflicts.length && <div className="calendar-booking-move-warning" role="alert">{reviewed.proposal.conflicts.map((conflict, index) => <p key={index}>{conflict.message}</p>)}</div>}
         {stale && <p role="status" className="calendar-booking-move-warning">The calendar changed after this preview. Refresh it before confirming.</p>}
         {error && <p role="alert" className="calendar-booking-move-warning">{error}</p>}
-        <p className="micro muted">Only these booked hours move. Project details, total hours, other bookings, lunch, and protected time stay intact.</p>
+        <p className="micro muted">These hours move to the chosen day. Other bookings stay in place. A regular task’s ribbon follows its booked days.</p>
         <div className="calendar-booking-move-actions"><button type="button" className="secondary" disabled={busy === "commit" || busy === "undo" || busy === "check"} onClick={close}>Cancel move</button>
           {unknown ? checkButton : canConfirm ? <button type="button" className="primary" onClick={confirmMove}><Check size={15} />Confirm move</button>
             : <button type="button" className="primary" disabled={!!busy} onClick={refreshPreview}>{busy === "commit" ? "Saving move…" : "Refresh preview"}</button>}</div>

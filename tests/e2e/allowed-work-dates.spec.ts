@@ -14,7 +14,7 @@ const targetDate = "2026-09-11";
 const title = "Fictional first wave of website edits";
 const itemId = "allowed-dates-website-edits";
 
-async function setup(page: Page, width = 1440, actor: "bryan" | "kyle" = "bryan", waiting = false) {
+async function setup(page: Page, width = 1440, actor: "bryan" | "kyle" = "bryan", waiting = false, limited = false, twoDays = false) {
   await asActor(page.request, actor);
   const stored = await state(page.request);
   expect(stored.mode).toBe("demo");
@@ -31,6 +31,10 @@ async function setup(page: Page, width = 1440, actor: "bryan" | "kyle" = "bryan"
     remainingMinutes: 120, minimumSessionMinutes: 60, targetDate: null, deadline: null,
     ...(waiting ? { status: "waiting", estimatedMinutes: null, remainingMinutes: null } : {}),
   });
+  delete item.dateConstraints; delete item.timelineMode;
+  if (limited) item.dateConstraints = { earliestStart: null, allowedDates: [sourceDate] };
+  if (waiting) { item.timelineMode = "span"; item.windowEnd = null; }
+  if (twoDays) { item.estimatedMinutes = 240; item.remainingMinutes = 240; }
   const neighbor = newWorkItem(fixture.actor, targetDate, {
     id: "allowed-dates-neighbor", clientId: "cedar", title: "Fictional protected neighbor",
     estimatedMinutes: 60, remainingMinutes: 60,
@@ -41,13 +45,14 @@ async function setup(page: Page, width = 1440, actor: "bryan" | "kyle" = "bryan"
     { id: "allowed-dates-booking", workItemId: item.id, start: at(sourceDate, "10:00"), end: at(sourceDate, "12:00"), protected: false, status: "planned", usesReserve: false },
     { id: "allowed-dates-protected-neighbor", workItemId: neighbor.id, start: at(targetDate, "09:00"), end: at(targetDate, "10:00"), protected: true, status: "planned", usesReserve: false },
   ];
+  if (twoDays) fixture.sessions.push({ id: "second-day", workItemId: itemId, start: at(targetDate, "14:00"), end: at(targetDate, "16:00"), protected: false, status: "planned", usesReserve: false });
   if (waiting) fixture.sessions = fixture.sessions.filter(session => session.workItemId !== itemId);
   const before = structuredClone(fixture);
   const requests: { action: string; commands: WorkCommand[] }[] = [];
   await page.route(`${origin}/api/state`, route => route.fulfill({ json: fixture }));
   for (const name of ["assistant", "workspace-chat", "transcribe"]) {
     await page.route(`${origin}/api/${name}`, () => {
-      throw new Error(`Editing allowed work dates must not call /api/${name}.`);
+      throw new Error(`Manual hours must not call /api/${name}.`);
     });
   }
   await page.route(`${origin}/api/commands`, async route => {
@@ -76,7 +81,7 @@ async function setup(page: Page, width = 1440, actor: "bryan" | "kyle" = "bryan"
 
 const calendar = (page: Page) => page.getByLabel("Month workload calendar", { exact: true });
 const details = (page: Page) => page.getByRole("dialog", { name: title, exact: true });
-const editor = (page: Page) => page.getByRole("dialog", { name: "Edit work", exact: true });
+const editor = (page: Page) => page.getByRole("dialog", { name: "Edit details", exact: true });
 const moveDialog = (page: Page) => page.getByRole("dialog", { name: "Move booked hours", exact: true });
 const moveHandle = (page: Page) => calendar(page).getByRole("button", { name: `Move Cedar Studio · ${title} on Sep 10`, exact: true });
 
@@ -89,158 +94,117 @@ async function openDetails(page: Page) {
   return details(page);
 }
 
-async function openEditor(page: Page) {
-  const dialog = await openDetails(page);
-  await expect(dialog.getByText("Allowed work dates", { exact: true })).toBeVisible();
-  await expect(dialog.getByText("Allowed work dates", { exact: true }).locator("..")).toContainText("Sep 10");
-  await dialog.getByRole("button", { name: "Edit work", exact: true }).click();
-  await expect(editor(page).getByLabel("Limit work to selected dates", { exact: true })).toBeChecked();
-  await expect(editor(page).getByLabel("Allowed work date 1", { exact: true })).toHaveValue(sourceDate);
-  return editor(page);
-}
-
-async function addFriday(page: Page) {
-  const form = editor(page);
-  await form.getByRole("button", { name: "Add allowed work date", exact: true }).click();
-  await expect(form.getByLabel("Allowed work date 2", { exact: true })).toHaveValue("");
-  await form.getByLabel("Allowed work date 2", { exact: true }).fill(targetDate);
-  await expect(form.getByLabel("Allowed work date 1", { exact: true })).toHaveValue(sourceDate);
-}
 
 async function previewMove(page: Page) {
-  await moveHandle(page).focus();
-  await page.keyboard.press("Enter");
+  await moveHandle(page).focus(); await page.keyboard.press("Enter");
   const picker = page.getByRole("region", { name: "Choose a day for booked hours", exact: true });
   await picker.getByLabel("Move booking to date", { exact: true }).fill(targetDate);
   await picker.getByRole("button", { name: "Preview move", exact: true }).click();
-  await expect(moveDialog(page)).toBeVisible();
   return moveDialog(page);
 }
-
 for (const width of [1440, 390]) {
-  test(`owner adds an allowed day without changing bookings, then moves the same hours at ${width}px`, async ({ page, baseURL }, info) => {
-    expect(baseURL).toBe(origin);
+  test(`legacy task moves freely and its ribbon follows at ${width}px`, async ({ page }, info) => {
     const context = await setup(page, width);
-    const rejected = await previewMove(page);
-    await expect(rejected.getByRole("alert")).toContainText(/allowed work dates/i);
-    await expect(rejected.getByRole("button", { name: "Confirm move", exact: true })).toHaveCount(0);
-    expect(context.fixture()).toEqual(context.before);
-    await rejected.getByRole("button", { name: "Cancel move", exact: true }).click();
-
-    const form = await openEditor(page);
-    await addFriday(page);
-    await form.getByLabel("Allowed work date 2", { exact: true }).scrollIntoViewIfNeeded();
-    await page.screenshot({ path: info.outputPath(`allowed-work-dates-editor-${width}.png`) });
-    expect(await form.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
-    await form.getByRole("button", { name: "Check schedule", exact: true }).click();
-    await expect(form.getByRole("heading", { name: "This fits your schedule", exact: true })).toBeVisible();
-    expect(context.fixture()).toEqual(context.before);
-    expect(context.requests.at(-1)).toMatchObject({ action: "preview", commands: [
-      { type: "update", itemId, patch: { allowedDates: [sourceDate, targetDate] } },
-      { type: "schedule", itemId, sessions: context.before.sessions.filter(session => session.workItemId === itemId) },
-    ] });
-    await expect(form.locator(".proposal-date-changes")).toContainText("Before: Sep 10, 2026");
-    await expect(form.locator(".proposal-date-changes")).toContainText("After: Sep 10, 2026, Sep 11, 2026");
-    await form.getByRole("button", { name: "Confirm changes", exact: true }).click();
-    await expect(form).toHaveCount(0);
-    const saved = structuredClone(context.fixture());
-    expect(saved.items.find(item => item.id === itemId)).toMatchObject({
-      allowedDates: [sourceDate, targetDate], estimatedMinutes: 120, remainingMinutes: 120,
-      windowStart: sourceDate, windowEnd: sourceDate, targetDate: null, deadline: null,
-    });
-    expect(saved.sessions).toEqual(context.before.sessions);
-    expect(saved.blocks).toEqual(context.before.blocks);
-    expect(saved.settings).toEqual(context.before.settings);
-    const dates = details(page).getByText("Allowed work dates", { exact: true }).locator("..");
-    await expect(dates).toContainText("Sep 10");
-    await expect(dates).toContainText("Sep 11");
-    await details(page).getByRole("button", { name: "Close dialog", exact: true }).click();
-
     const move = await previewMove(page);
     await expect(move.getByRole("button", { name: "Confirm move", exact: true })).toBeEnabled();
-    expect(context.fixture()).toEqual(saved);
-    await move.screenshot({ path: info.outputPath(`allowed-work-dates-move-preview-${width}.png`) });
+    expect(context.fixture()).toEqual(context.before);
+    await move.screenshot({ path: info.outputPath(`simple-move-${width}.png`) });
     await move.getByRole("button", { name: "Confirm move", exact: true }).click();
     await expect(move).toHaveCount(0);
-    const moved = context.fixture();
-    expect(moved.sessions.map(session => session.id)).toEqual(saved.sessions.map(session => session.id));
-    const booking = moved.sessions.find(session => session.workItemId === itemId)!;
-    expect(localDate(booking.start, moved.settings.timeZone)).toBe(targetDate);
-    expect(minutesBetween(booking.start, booking.end)).toBe(120);
-    expect(moved.sessions.filter(session => session.workItemId !== itemId)).toEqual(saved.sessions.filter(session => session.workItemId !== itemId));
-    expect(moved.items.find(item => item.id === itemId)).toMatchObject({ allowedDates: [sourceDate, targetDate], estimatedMinutes: 120, remainingMinutes: 120 });
-    expect(moved.blocks).toEqual(saved.blocks);
-    expect(moved.settings).toEqual(saved.settings);
+    const moved = context.fixture().sessions.find(session => session.id === "allowed-dates-booking")!;
+    expect(localDate(moved.start, context.fixture().settings.timeZone)).toBe(targetDate);
+    expect(minutesBetween(moved.start, moved.end)).toBe(120);
+    expect(context.fixture().sessions.filter(session => session.workItemId !== itemId)).toEqual(context.before.sessions.filter(session => session.workItemId !== itemId));
+    expect(context.fixture().items.find(item => item.id === itemId)?.remainingMinutes).toBe(120);
+    await expect(calendar(page).locator(`[data-work-item-id="${itemId}"][data-booking-date="${sourceDate}"]`)).toHaveCount(0);
+  });
+  test(`daily hours update the regular total and preserve other days at ${width}px`, async ({ page }, info) => {
+    const context = await setup(page, width, "bryan", false, false, true);
+    const dialog = await openDetails(page);
+    await dialog.getByRole("button", { name: "Edit hours", exact: true }).click();
+    await dialog.getByLabel("Hours on day 2", { exact: true }).fill("1");
+    await dialog.getByRole("button", { name: "Review changes", exact: true }).click();
+    await expect(dialog.getByRole("button", { name: "Confirm changes", exact: true })).toBeVisible();
+    expect(context.fixture()).toEqual(context.before);
+    await dialog.screenshot({ path: info.outputPath(`simple-day-hours-${width}.png`) });
+    await dialog.getByRole("button", { name: "Confirm changes", exact: true }).click();
+    expect(context.fixture().items.find(item => item.id === itemId)?.remainingMinutes).toBe(180);
+    expect(context.fixture().sessions.find(session => session.id === "allowed-dates-booking")).toEqual(context.before.sessions.find(session => session.id === "allowed-dates-booking"));
+    expect(context.requests.at(-1)?.commands).toEqual([{ type: "set_day_hours", itemId, days: [{ date: targetDate, minutes: 60 }] }]);
   });
 }
-
-test("cancelling an allowed-date preview discards the draft and keeps the original restriction", async ({ page }) => {
-  const context = await setup(page);
-  const form = await openEditor(page);
-  await addFriday(page);
-  await form.getByRole("button", { name: "Check schedule", exact: true }).click();
-  await expect(form.getByRole("heading", { name: "This fits your schedule", exact: true })).toBeVisible();
-  await form.getByRole("button", { name: "Close dialog", exact: true }).click();
-  await expect(form).toHaveCount(0);
-  expect(context.fixture()).toEqual(context.before);
-  expect(context.requests.map(request => request.action)).toEqual(["preview"]);
-  await details(page).getByRole("button", { name: "Edit work", exact: true }).click();
-  await expect(form.getByLabel("Allowed work date 1", { exact: true })).toHaveValue(sourceDate);
-  await expect(form.getByLabel("Allowed work date 2", { exact: true })).toHaveCount(0);
-});
-
-test("extending only the faded project span preserves allowed dates and still blocks an unapproved day", async ({ page }) => {
-  const context = await setup(page);
-  const form = await openEditor(page);
-  await form.getByLabel(/^Project span ends/).fill("2026-09-30");
-  await form.getByRole("button", { name: "Check schedule", exact: true }).click();
-  await expect(form.getByRole("heading", { name: "This fits your schedule", exact: true })).toBeVisible();
-  await form.getByRole("button", { name: "Confirm changes", exact: true }).click();
-  await expect(form).toHaveCount(0);
-  const saved = structuredClone(context.fixture());
-  expect(saved.items.find(item => item.id === itemId)).toMatchObject({ windowEnd: "2026-09-30", allowedDates: [sourceDate] });
-  expect(saved.sessions).toEqual(context.before.sessions);
-  await details(page).getByRole("button", { name: "Close dialog", exact: true }).click();
+test("explicit optional date limits still apply and can be removed without moving bookings", async ({ page }) => {
+  const context = await setup(page, 1440, "bryan", false, true);
   const move = await previewMove(page);
-  await expect(move.getByRole("alert")).toContainText(/allowed work dates/i);
-  await expect(move.getByRole("button", { name: "Confirm move", exact: true })).toHaveCount(0);
-  expect(context.fixture()).toEqual(saved);
-});
-
-test("requesters can see the allowed work dates without owner editing or move controls", async ({ page }) => {
-  const context = await setup(page, 1440, "kyle");
-  await expect(moveHandle(page)).toHaveCount(0);
+  await expect(move.getByRole("alert")).toContainText(/allowed work date/i);
+  await move.getByRole("button", { name: "Cancel move", exact: true }).click();
   const dialog = await openDetails(page);
-  await expect(dialog.getByText("Allowed work dates", { exact: true }).locator("..")).toContainText("Sep 10");
-  await expect(dialog.getByRole("button", { name: "Edit work", exact: true })).toHaveCount(0);
-  await expect(dialog.getByLabel("Limit work to selected dates", { exact: true })).toHaveCount(0);
-  expect(context.requests).toEqual([]);
-  expect(context.fixture()).toEqual(context.before);
-});
-
-test("waiting work can change its allowed dates without resuming or booking hours", async ({ page }) => {
-  const context = await setup(page, 1440, "bryan", true);
-  const form = await openEditor(page);
-  await addFriday(page);
-  await form.getByRole("button", { name: "Check schedule", exact: true }).click();
-  await expect(form.getByRole("heading", { name: "This fits your schedule", exact: true })).toBeVisible();
-  expect(context.requests.at(-1)?.commands).toHaveLength(1);
-  expect(context.fixture()).toEqual(context.before);
-  await form.getByRole("button", { name: "Confirm changes", exact: true }).click();
-  await expect(form).toHaveCount(0);
-  expect(context.fixture().items.find(item => item.id === itemId)).toMatchObject({ status: "waiting", allowedDates: [sourceDate, targetDate], estimatedMinutes: null, remainingMinutes: null });
-  expect(context.fixture().sessions).toEqual(context.before.sessions);
-});
-
-test("the owner can explicitly remove the date restriction while retaining exact bookings", async ({ page }) => {
-  const context = await setup(page);
-  const form = await openEditor(page);
+  await dialog.getByRole("button", { name: "Edit details", exact: true }).click();
+  const form = editor(page);
+  await form.getByText("Scheduling limits (optional)", { exact: true }).click();
   await form.getByLabel("Limit work to selected dates", { exact: true }).uncheck();
-  await form.getByRole("button", { name: "Check schedule", exact: true }).click();
-  await expect(form.locator(".proposal-date-changes")).toContainText("After: Any working day");
-  expect(context.fixture()).toEqual(context.before);
+  await expect(form.getByLabel("Minimum focus session", { exact: true })).toHaveCount(0);
+  await form.getByRole("button", { name: "Review changes", exact: true }).click();
   await form.getByRole("button", { name: "Confirm changes", exact: true }).click();
-  await expect(form).toHaveCount(0);
-  expect(context.fixture().items.find(item => item.id === itemId)?.allowedDates).toEqual([]);
   expect(context.fixture().sessions).toEqual(context.before.sessions);
+  expect(context.fixture().items.find(item => item.id === itemId)?.dateConstraints?.allowedDates).toEqual([]);
 });
+test("cancelling an hours edit makes no changes", async ({ page }) => {
+  const context = await setup(page);
+  const dialog = await openDetails(page);
+  await dialog.getByRole("button", { name: "Edit hours", exact: true }).click();
+  await dialog.getByRole("button", { name: "Remove day 1", exact: true }).click();
+  await dialog.getByRole("button", { name: "Review changes", exact: true }).click();
+  await dialog.getByRole("button", { name: "Cancel edits", exact: true }).click();
+  expect(context.fixture()).toEqual(context.before);
+});
+test("requesters cannot edit or drag existing work", async ({ page }) => {
+  await setup(page, 390, "kyle");
+  const dialog = await openDetails(page);
+  await expect(dialog.getByRole("button", { name: "Edit details", exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "Edit hours", exact: true })).toHaveCount(0);
+  await expect(moveHandle(page)).toHaveCount(0);
+});
+
+for (const width of [1440, 390]) {
+  test(`create unequal dated hours and ongoing work at ${width}px`, async ({ page }, info) => {
+    const context = await setup(page, width);
+    await page.getByRole("button", { name: "Add work", exact: true }).click();
+    const form = page.getByRole("dialog", { name: "Make room for new work", exact: true });
+    await form.getByLabel("What needs doing?", { exact: true }).fill("Fictional simple dates");
+    await form.getByRole("button", { name: /^Days and hours/ }).click();
+    await form.getByLabel("Work day 1", { exact: true }).fill("2026-09-14");
+    await form.getByLabel("Hours on day 1", { exact: true }).fill("2");
+    await form.getByRole("button", { name: "Add day", exact: true }).click();
+    await form.getByLabel("Work day 2", { exact: true }).fill("2026-09-16");
+    await form.getByLabel("Hours on day 2", { exact: true }).fill("1");
+    await expect(form.getByLabel("Minimum focus session", { exact: true })).toHaveCount(0);
+    await form.getByRole("button", { name: "Review changes", exact: true }).click();
+    await form.getByRole("button", { name: "Confirm changes", exact: true }).click();
+    await expect(form).toHaveCount(0);
+    const task = context.fixture().items.find(item => item.title === "Fictional simple dates")!;
+    expect(task).toMatchObject({ remainingMinutes: 180, timelineMode: "bookings", dateConstraints: { earliestStart: null, allowedDates: [] } });
+    expect(task.dailyPlan).toEqual([{ date: "2026-09-14", minutes: 120 }, { date: "2026-09-16", minutes: 60 }]);
+    await page.getByRole("button", { name: "Add work", exact: true }).click();
+    await form.getByLabel("What needs doing?", { exact: true }).fill("Fictional ongoing updates");
+    await form.getByRole("button", { name: /^Ongoing/ }).click();
+    await expect(form.getByLabel(/No end date/)).toBeChecked();
+    await form.screenshot({ path: info.outputPath(`ongoing-create-${width}.png`) });
+    expect(await form.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    await form.getByRole("button", { name: "Review changes", exact: true }).click();
+    await form.getByRole("button", { name: "Confirm changes", exact: true }).click();
+    const ongoing = context.fixture().items.find(item => item.title === "Fictional ongoing updates")!;
+    expect(ongoing).toMatchObject({ timelineMode: "span", windowEnd: null, estimatedMinutes: null, remainingMinutes: null, status: "waiting" });
+    expect(context.fixture().sessions.filter(session => session.workItemId === ongoing.id)).toHaveLength(0);
+    await calendar(page).getByTitle("Cedar Studio · Fictional ongoing updates", { exact: true }).first().focus();
+    await page.keyboard.press("Enter");
+    const ongoingDialog = page.getByRole("dialog", { name: "Fictional ongoing updates", exact: true });
+    await ongoingDialog.getByRole("button", { name: "Add hours", exact: true }).click();
+    await ongoingDialog.getByLabel("Work day 1", { exact: true }).fill(targetDate);
+    await ongoingDialog.getByLabel("Hours on day 1", { exact: true }).fill("3");
+    await ongoingDialog.getByRole("button", { name: "Review changes", exact: true }).click();
+    await ongoingDialog.getByRole("button", { name: "Confirm changes", exact: true }).click();
+    expect(context.fixture().items.find(item => item.id === ongoing.id)).toMatchObject({ remainingMinutes: null, estimatedMinutes: null, status: "planned", windowEnd: null });
+    expect(context.fixture().sessions.filter(session => session.workItemId === ongoing.id).reduce((total, session) => total + minutesBetween(session.start, session.end), 0)).toBe(180);
+  });
+}

@@ -10,7 +10,7 @@ async function fillBooking(form: Locator, title: string, date: string) {
 
 async function saveBooking(page: Page, form: Locator, requester = false) {
   const before = await state(page.request);
-  await form.getByRole("button", { name: "Check schedule", exact: true }).click();
+  await form.getByRole("button", { name: "Review changes", exact: true }).click();
   await expect(form.getByRole("heading", { name: "This fits your schedule" })).toBeVisible();
   expect((await state(page.request)).version).toBe(before.version);
   await form.getByRole("button", { name: requester ? "Book this work" : "Confirm changes", exact: true }).click();
@@ -63,8 +63,8 @@ for (const viewport of [
     expect(normalWork).toMatchObject({ category: "it", priorityId: "normal", requesterId: "bryan" });
 
     await page.goto(`/?work=${normalWork.id}`);
-    await page.getByRole("dialog").getByRole("button", { name: "Edit work", exact: true }).click();
-    await expect(page.getByRole("dialog", { name: "Edit work" }).getByRole("combobox", { name: "Priority", exact: true })).toHaveValue("normal");
+    await page.getByRole("dialog").getByRole("button", { name: "Edit details", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Edit details" }).getByRole("combobox", { name: "Priority", exact: true })).toHaveValue("normal");
   });
 }
 
@@ -93,8 +93,8 @@ test("changing existing Normal work to IT preserves its saved priority", async (
   });
   const booked = await commit(page.request, await preview(page.request, [{ type: "create", item: work }]));
   await page.goto(`/?work=${work.id}`);
-  await page.getByRole("dialog").getByRole("button", { name: "Edit work", exact: true }).click();
-  const form = page.getByRole("dialog", { name: "Edit work" });
+  await page.getByRole("dialog").getByRole("button", { name: "Edit details", exact: true }).click();
+  const form = page.getByRole("dialog", { name: "Edit details" });
   await form.getByRole("combobox", { name: "Work category", exact: true }).selectOption("it");
   await expect(form.getByRole("combobox", { name: "Priority", exact: true })).toHaveValue("normal");
   const after = await saveBooking(page, form);

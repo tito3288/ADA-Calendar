@@ -204,8 +204,8 @@ describe("plain-language project spans through private clarification replies (of
     const combined = `${malformedOriginal}\n${reply}`;
     const patch = field === "allowedDates" ? { allowedDates: ["2026-10-31"] } : { [field]: "2026-10-31" };
     const result = compileInterpretation(extraction(combined, { windowStart: "2026-09-09", windowEnd: "2026-10-31", ...patch }), combined, snapshot(), owner, now, reply);
-    expect(result.kind).toBe("clarification");
-    expect(result.commands).toEqual([]);
+    if (field === "deadline") expect(result.commands[0]).toMatchObject({ item: { deadline: null } });
+    else { expect(result.kind).toBe("clarification"); expect(result.commands).toEqual([]); }
   });
 
   it("does not invent effort or sessions while recovering a waiting project and its corrected dates", () => {
@@ -280,8 +280,8 @@ describe("plain-language project spans through private clarification replies (of
     const combined = `${malformedOriginal}\n${reply}`;
     const patch = field === "allowedDates" ? { allowedDates: ["2026-11-30"] } : { [field]: "2026-11-30" };
     const result = compileInterpretation(extraction(combined, { windowStart: "2026-09-15", windowEnd: "2026-11-30", ...patch }), combined, snapshot(), owner, now, reply);
-    expect(result.kind).toBe("clarification");
-    expect(result.commands).toEqual([]);
+    if (field === "deadline") expect(result.commands[0]).toMatchObject({ item: { deadline: null } });
+    else { expect(result.kind).toBe("clarification"); expect(result.commands).toEqual([]); }
   });
 
   it("preserves separately stated deadline and session dates beside a display timeline", () => {

@@ -20,7 +20,7 @@ vi.mock("./server/service", async () => {
   const demo = await import("./server/demo-store");
   return {
     currentActor: vi.fn(async () => DEMO_MEMBERS[0]), demoEnabled: vi.fn(() => true),
-    store: { getState: vi.fn(async (id: string) => demo.getDemoState(demo.demoActor(id))), commit: vi.fn(demo.commitDemoProposal), request: vi.fn(demo.submitDemoRequest),
+    store: { getState: vi.fn(async (id: string) => demo.getDemoState(demo.demoActor(id))), hasCommittedOperation: vi.fn(demo.hasCommittedDemoOperation), commit: vi.fn(demo.commitDemoProposal), request: vi.fn(demo.submitDemoRequest),
       resolve: vi.fn(demo.resolveDemoRequest), undo: vi.fn(demo.undoDemoEvent), admin: vi.fn(demo.mutateDemoAdmin), beginAI: vi.fn(demo.beginDemoAIOperation), finishAI: vi.fn(demo.finishDemoAIOperation), getAI: vi.fn(demo.getDemoAIOperation) },
   };
 });
@@ -29,7 +29,7 @@ vi.mock("./server/assistant", async importOriginal => {
   return { ...actual, interpretInput: vi.fn(actual.interpretInput), inspectAudioRecording: vi.fn(actual.inspectAudioRecording), transcribeAudio: vi.fn(actual.transcribeAudio) };
 });
 
-import { beginDemoAIOperation, commitDemoProposal, demoActor, demoDirectory, finishDemoAIOperation, getDemoState, mutateDemoAdmin, resolveDemoRequest, submitDemoRequest } from "./server/demo-store";
+import { beginDemoAIOperation, commitDemoProposal, demoActor, demoDirectory, demoTransaction, finishDemoAIOperation, getDemoState, mutateDemoAdmin, resolveDemoRequest, submitDemoRequest } from "./server/demo-store";
 import { inspectAudioRecording, interpretInput, transcribeAudio } from "./server/assistant";
 import { currentActor, demoEnabled, store } from "./server/service";
 import { GET, POST } from "../app/api/[...path]/route";
@@ -273,7 +273,7 @@ async function pendingRequest() {
   const state = await getDemoState(actor);
   const date = nextWorkDate(addDays(localDate(new Date().toISOString(), state.settings.timeZone), 30), state.settings);
   const item = newWorkItem(actor, date, { id: "pending-work", clientId: "higher-ground", title: "Large pending request", estimatedMinutes: 600, remainingMinutes: 600, windowEnd: date, deadline: date });
-  const proposal = planCommands(state, [{ type: "create", item }], actor, { operationId: "pending-request" });
+  const proposal = planCommands(state, [{ type: "create", item, smartFit: { startDate: date, endDate: date, minutes: 600, distribution: "total" } }], actor, { operationId: "pending-request" });
   expect(proposal.status).not.toBe("ready");
   await submitDemoRequest(actor, proposal);
   return { item, proposal, date };
@@ -451,6 +451,69 @@ describe("privileged upload signing after trusted reservation", () => {
 
 describe("assistant route admission and retries", () => {
   const pendingInput = () => ({ text: "Add IT work for Higher Ground Tree: Private follow-up work, on 2030-09-09", operationId: crypto.randomUUID() });
+  it("requires a fresh instruction for cached pre-upgrade commands without changing private history or work", async () => {
+    const before = await getDemoState(DEMO_MEMBERS[0]);
+    const item = newWorkItem(DEMO_MEMBERS[0], "2030-09-09", { clientId: "higher-ground", title: "Fictional legacy instruction" });
+    delete item.dateConstraints; delete item.timelineMode;
+    vi.mocked(store.beginAI).mockResolvedValueOnce({ status: "completed", result: { interpretation: { kind: "commands", message: "Legacy proposal", commands: [{ type: "create", item }] } } });
+    const response = await request("assistant", { text: "Add fictional legacy instruction", operationId: "pre-upgrade-uncommitted" });
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toContain("fresh plan");
+    expect(await getDemoState(DEMO_MEMBERS[0])).toEqual(before);
+    expect(interpretInput).not.toHaveBeenCalled();
+  });
+  it("returns a previously committed pre-upgrade instruction without duplicating its effects", async () => {
+    const input = { text: "Add IT work for Higher Ground Tree: Fictional committed legacy work, 1 hour on 2030-09-09", operationId: "pre-upgrade-committed" };
+    expect((await request("assistant", input)).status).toBe(200);
+    const saved = await getDemoState(DEMO_MEMBERS[0]);
+    const result = (await store.getAI(DEMO_MEMBERS[0], input.operationId)).result as { interpretation: Interpretation };
+    vi.mocked(store.beginAI).mockResolvedValueOnce({ status: "completed", result: { interpretation: result.interpretation } });
+    expect((await request("assistant", input)).status).toBe(200);
+    expect(await getDemoState(DEMO_MEMBERS[0])).toEqual(saved);
+  });
+  it("recognizes an exact pre-upgrade committed retry beyond the newest 200 visible events", async () => {
+    const input = { text: "Add IT work for Higher Ground Tree: Fictional older committed work, 1 hour on 2030-09-09", operationId: "pre-upgrade-older-commit" };
+    expect((await request("assistant", input)).status).toBe(200);
+    const result = (await store.getAI(DEMO_MEMBERS[0], input.operationId)).result as { interpretation: Interpretation };
+    await demoTransaction(state => {
+      const prior = state.events.find(event => event.operationId === input.operationId)!;
+      const newer = Array.from({ length: 200 }, (_, index) => ({ ...prior, id: `fixture-newer-${index}`, operationId: `fixture-newer-${index}`, version: state.version + index + 1,
+        summary: ["Fictional ledger pagination fixture"], before: { items: [], sessions: [], blocks: [] }, after: { items: [], sessions: [], blocks: [] } }));
+      state.events.unshift(...newer.reverse()); state.version += newer.length;
+    });
+    const saved = await getDemoState(DEMO_MEMBERS[0]);
+    expect(saved.events.slice(0, 200).some(event => event.operationId === input.operationId)).toBe(false);
+    const originalGetState = vi.mocked(store.getState).getMockImplementation()!;
+    vi.mocked(store.getState).mockImplementation(async id => { const snapshot = await getDemoState(demoActor(id)); return { ...snapshot, events: snapshot.events.slice(0, 200) }; });
+    try {
+      vi.mocked(store.beginAI).mockResolvedValueOnce({ status: "completed", result: { interpretation: result.interpretation } });
+      const response = await request("assistant", input);
+      expect(response.status, JSON.stringify(await response.clone().json())).toBe(200);
+      expect(await getDemoState(DEMO_MEMBERS[0])).toEqual(saved);
+      expect(store.hasCommittedOperation).toHaveBeenCalledWith(DEMO_MEMBERS[0], input.operationId, expect.any(Array));
+      expect(interpretInput).toHaveBeenCalledTimes(1);
+    } finally { vi.mocked(store.getState).mockImplementation(originalGetState); }
+  });
+  it.each(["actor", "commands"] as const)("rejects a cached committed operation whose %s does not match the ledger", async mismatch => {
+    const input = { text: "Add IT work for Higher Ground Tree: Fictional bound operation, 1 hour on 2030-09-09", operationId: `pre-upgrade-mismatch-${mismatch}` };
+    expect((await request("assistant", input)).status).toBe(200);
+    const result = (await store.getAI(DEMO_MEMBERS[0], input.operationId)).result as { interpretation: Interpretation };
+    const interpretation = structuredClone(result.interpretation);
+    if (mismatch === "actor") await demoTransaction(state => { state.events.find(event => event.operationId === input.operationId)!.actorId = DEMO_MEMBERS[1].id; });
+    else {
+      const command = interpretation.commands[0];
+      expect(command.type).toBe("create");
+      if (command.type === "create") command.item.title = "Different fictional cached command";
+    }
+    const saved = await getDemoState(DEMO_MEMBERS[0]);
+    vi.mocked(store.commit).mockClear();
+    vi.mocked(store.beginAI).mockResolvedValueOnce({ status: "completed", result: { interpretation } });
+    const response = await request("assistant", input);
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toContain("saved commands");
+    expect(store.commit).not.toHaveBeenCalled();
+    expect(await getDemoState(DEMO_MEMBERS[0])).toEqual(saved);
+  });
   it("keeps clarification private and commits a short answer exactly once", async () => {
     const input = pendingInput();
     const before = await getDemoState(DEMO_MEMBERS[0]);

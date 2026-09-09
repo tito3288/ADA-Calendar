@@ -43,7 +43,7 @@ describe("grounded calendar start dates (offline compiler and scheduler)", () =>
     const interpretation = compileInterpretation(raw, text, state, owner, now);
     expect(interpretation.kind).toBe("commands");
     expect(interpretation.commands).toHaveLength(1);
-    expect(interpretation.commands[0]).toMatchObject({ type: "create", item: { windowStart: tomorrow, windowEnd: tomorrow, allowedDates: [tomorrow] } });
+    expect(interpretation.commands[0]).toMatchObject({ type: "create", item: { windowStart: tomorrow, windowEnd: tomorrow, allowedDates: [] } });
 
     const plan = planCommands(state, interpretation.commands, owner, { now: now.toISOString() });
     expect(plan.status).toBe("ready");
@@ -64,11 +64,11 @@ describe("grounded calendar start dates (offline compiler and scheduler)", () =>
     expect(raw.actions[0].windowStart).toBeNull();
   });
 
-  it("uses the earliest allowed day even when the provider lists days out of order", () => {
+  it("asks for a range or day amounts for separate alternative workdays", () => {
     const text = "Schedule CIDWP for 3 hours on 2026-09-11 or 2026-09-09.";
     const result = compile(text, { allowedDates: ["2026-09-11", tomorrow] });
-    expect(result.kind).toBe("commands");
-    expect(result.commands[0]).toMatchObject({ item: { windowStart: tomorrow, allowedDates: ["2026-09-11", tomorrow] } });
+    expect(result.kind).toBe("clarification");
+    expect(result.commands).toEqual([]);
   });
 
   it("uses an explicit future timed session when neither a window start nor allowed dates were supplied", () => {
@@ -111,7 +111,7 @@ describe("grounded calendar start dates (offline compiler and scheduler)", () =>
     const text = "Add CIDWP homepage work for 3 hours, with a checkpoint on 2026-09-11.";
     const result = compile(text, { [field]: "2026-09-11" });
     expect(result.kind).toBe("commands");
-    expect(result.commands[0]).toMatchObject({ item: { windowStart: today, [field]: "2026-09-11", allowedDates: [] } });
+    expect(result.commands[0]).toMatchObject({ item: { windowStart: today, [field]: field === "deadline" ? null : "2026-09-11", allowedDates: [] } });
   });
 
   it("retains today's default when no work dates were specified", () => {
@@ -147,7 +147,7 @@ describe("grounded calendar start dates (offline compiler and scheduler)", () =>
     expect(result.kind).toBe("commands");
     const plan = planCommands(state, result.commands, owner, { now: now.toISOString() });
     expect(plan.status).toBe("infeasible");
-    expect(plan.conflicts.some(conflict => conflict.code === "capacity")).toBe(true);
+    expect(plan.conflicts.some(conflict => conflict.code === "smart_fit_capacity")).toBe(true);
     expect(plan.items).toEqual([]);
     expect(plan.sessions).toEqual([]);
     expect(plan.blocks).toEqual(state.blocks);
@@ -158,7 +158,7 @@ describe("grounded calendar start dates (offline compiler and scheduler)", () =>
     const text = "CIDWP needs a homepage demo. Start to finish on September, 9th, for 3 hours.";
     const result = compile(text, { allowedDates: [tomorrow], windowEnd: tomorrow });
     expect(result.kind).toBe("commands");
-    expect(result.commands[0]).toMatchObject({ item: { windowStart: tomorrow, windowEnd: tomorrow, allowedDates: [tomorrow] } });
+    expect(result.commands[0]).toMatchObject({ item: { windowStart: tomorrow, windowEnd: tomorrow, allowedDates: [] } });
   });
 
   it("does not let comma-tolerant grounding accept a different day or an impossible date", () => {

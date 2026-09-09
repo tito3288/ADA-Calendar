@@ -15,7 +15,7 @@ const move: WorkCommand = { type: "move_bookings", sessionIds: ["booking"], date
 function snapshot(patch: Partial<WorkItem> = {}): ScheduleSnapshot {
   const item = newWorkItem(owner, source, {
     id: "site", title: "Fictional website edits", clientId: "client", estimatedMinutes: 120, remainingMinutes: 120,
-    windowEnd: source, allowedDates: [source], minimumSessionMinutes: 60, ...patch,
+    windowEnd: source, allowedDates: [source], dateConstraints: { earliestStart: null, allowedDates: [source] }, minimumSessionMinutes: 60, ...patch,
   });
   const session: WorkSession = {
     id: "booking", workItemId: item.id, start: at(source, "10:00"), end: at(source, "12:00"),
@@ -34,7 +34,7 @@ function plan(state: ScheduleSnapshot, commands: WorkCommand[]) {
 
 function widen(state: ScheduleSnapshot) {
   return plan(state, [
-    { type: "update", itemId: "site", patch: { allowedDates: [source, destination] } },
+    { type: "update", itemId: "site", patch: { dateConstraints: { earliestStart: null, allowedDates: [source, destination] } } },
     { type: "schedule", itemId: "site", sessions: state.sessions.filter(session => session.workItemId === "site" && session.status === "planned") },
   ]);
 }
@@ -62,12 +62,12 @@ describe("visible and explicitly editable allowed work dates", () => {
     expect(message).toContain("Sep 11, 2026 is not an allowed work date");
     expect(message).toContain("Allowed work dates: Sep 10, 2026");
     expect(message).toContain("Open Edit work");
-    expect(message).toContain("under Allowed work dates");
-    expect(message).toContain("extending it alone will not change this restriction");
+    expect(message).toContain("explicit scheduling limits");
+    expect(message).toContain("Display dates do not restrict moving work");
   });
 
   it("keeps the list readable and bounded for a project with many allowed days", () => {
-    const state = snapshot({ allowedDates: Array.from({ length: 30 }, (_, index) => addDays(source, index * 2)) });
+    const state = snapshot({ dateConstraints: { earliestStart: null, allowedDates: Array.from({ length: 30 }, (_, index) => addDays(source, index * 2)) } });
     const proposal = plan(state, [move]);
     blocked(state, proposal, "outside_allowed_dates");
     expect(proposal.conflicts[0].message).toContain("and 24 more");
@@ -80,7 +80,7 @@ describe("visible and explicitly editable allowed work dates", () => {
     const widened = saved(state, widen(state));
     expect(widened.sessions).toEqual(before.sessions);
     expect(widened.items[0]).toMatchObject({
-      allowedDates: [source, destination], windowStart: source, windowEnd: source,
+      dateConstraints: { earliestStart: null, allowedDates: [source, destination] }, windowStart: source, windowEnd: source,
       estimatedMinutes: remainingMinutes, remainingMinutes, deadline: null,
     });
     expect(widened.settings).toEqual(before.settings);
@@ -116,11 +116,11 @@ describe("visible and explicitly editable allowed work dates", () => {
   });
 
   it("identifies an actual earliest-start restriction instead of suggesting the display span", () => {
-    const state = snapshot({ allowedDates: [] });
+    const state = snapshot({ dateConstraints: { earliestStart: source, allowedDates: [] } });
     const proposal = plan(state, [{ ...move, date: "2026-09-09" }]);
     blocked(state, proposal, "outside_allowed_dates");
     expect(proposal.conflicts[0].message).toContain("Sep 9, 2026 is before this project's earliest start, Sep 10, 2026");
-    expect(proposal.conflicts[0].message).toContain("change Earliest start");
+    expect(proposal.conflicts[0].message).toContain("explicit scheduling limits");
     expect(proposal.conflicts[0].message).not.toContain("Allowed work dates");
   });
 

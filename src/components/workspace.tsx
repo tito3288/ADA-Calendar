@@ -966,7 +966,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                         </span>
                         <span>
                           {i.remainingMinutes === null
-                            ? "Needs estimate"
+                            ? "Hours added as needed"
                             : formatHours(i.remainingMinutes)}
                         </span>
                         <span>
@@ -1245,7 +1245,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
             )}
             <div className="side-list">
               <h3>
-                Not fully scheduled <span>{unscheduled.length}</span>
+                Hours to plan <span>{unscheduled.length}</span>
               </h3>
               {unscheduled.slice(0, 3).map((i) => (
                 <button key={i.id} onClick={() => setSelectedId(i.id)}>
@@ -1254,7 +1254,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                     {i.title}
                     <small>
                       {i.remainingMinutes === null
-                        ? "Effort estimate needed"
+                        ? "Hours added as needed"
                         : `${formatHours(i.remainingMinutes)} remaining`}
                     </small>
                   </span>
@@ -1333,12 +1333,12 @@ export function Workspace({ initialState }: { initialState: AppState }) {
         onClose={() => setForm(false)}
         title={
           editing
-            ? "Edit work"
+            ? "Edit details"
             : owner
               ? "Make room for new work"
               : "Find an opening"
         }
-        description="Estimate the effort. ADA checks the hours."
+        description="Choose days and hours, or keep an ongoing project visible."
         wide
       >
         <WorkForm
@@ -1380,7 +1380,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
           />
         )}
       </Modal>
-      <Modal open={!!selected && findingTime} onClose={() => setFindingTime(false)} title={selected ? `Find time · ${selected.title}` : "Find a time for me"} wide>
+      <Modal open={!!selected && findingTime} onClose={() => setFindingTime(false)} title={selected ? `Add hours · ${selected.title}` : "Add hours"} wide>
         {selected && <SessionManager key={selected.id} item={selected} state={state} onSaved={update} onClose={() => setFindingTime(false)} />}
       </Modal>
       <Modal
