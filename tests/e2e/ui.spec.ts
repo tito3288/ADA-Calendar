@@ -53,9 +53,8 @@ test("manual owner entry previews before saving, then supports explicit project 
   await dialog.getByRole("combobox", { name: "Client", exact: true }).selectOption("higher-ground");
   await dialog.getByLabel("What needs doing?").fill("E2E manual thank-you edit");
   await dialog.getByLabel("Description", { exact: true }).fill("Verify manual effort, capacity preview, and completion.");
-  await dialog.getByLabel("Estimated effort (hours)", { exact: false }).fill("0.5");
-  await dialog.getByLabel("Earliest start").fill(date);
-  await dialog.getByLabel("Project span ends", { exact: false }).fill(date);
+  await dialog.getByLabel("Hours to book", { exact: true }).fill("0.5");
+  await dialog.getByLabel("Work day", { exact: true }).fill(date);
   await dialog.getByRole("button", { name: "Check schedule" }).click();
   await expect(dialog.getByRole("heading", { name: "This fits your schedule" })).toBeVisible();
   expect((await state(page.request)).version).toBe(before.version);
@@ -91,9 +90,8 @@ test("requester sees the shared plate with read-only details and can clean-fit b
   const form = page.getByRole("dialog");
   await form.getByRole("combobox", { name: "Client", exact: true }).selectOption("higher-ground");
   await form.getByLabel("What needs doing?").fill("E2E William clean-fit request");
-  await form.getByLabel("Estimated effort (hours)", { exact: false }).fill("0.5");
-  await form.getByLabel("Earliest start").fill(date);
-  await form.getByLabel("Project span ends", { exact: false }).fill(date);
+  await form.getByLabel("Hours to book", { exact: true }).fill("0.5");
+  await form.getByLabel("Work day", { exact: true }).fill(date);
   await form.getByRole("combobox", { name: "Suggested priority", exact: true }).selectOption("high");
   await form.getByRole("button", { name: "Check schedule" }).click();
   await form.getByRole("button", { name: "Book this work" }).click();

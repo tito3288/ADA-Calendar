@@ -11,6 +11,8 @@ import { localDate, localDateTime, minutesBetween } from "@/lib/time";
 import { newWorkItem, formatHours } from "@/lib/work";
 import { CATEGORY_LABELS } from "@/lib/defaults";
 import { api, ApiError, Field, dateLabel, timeLabel } from "./ui";
+import { SchedulingMode, SmartFitFields } from "./smart-fit-fields";
+import { smartFitRequest, smartFitTotal, type SmartFitDraft } from "@/lib/smart-fit";
 
 export function ProposalCard({
   proposal,
@@ -25,6 +27,9 @@ export function ProposalCard({
 }) {
   const ready = proposal.status === "ready" && !proposal.requiresApproval;
   const requester = state.actor.role === "requester";
+  const smartFit = proposal.commands.some(command => command.type === "fit" || (command.type === "create" && command.smartFit));
+  const visibleSessions = proposal.sessions.filter(session => proposal.affectedItemIds.includes(session.workItemId) && session.status === "planned"
+    && (!smartFit || !state.sessions.some(existing => existing.id === session.id)));
   const underallocated = state.items.filter(
     (item) =>
       ["planned", "in_progress"].includes(item.status) &&
@@ -46,7 +51,7 @@ export function ProposalCard({
         {ready
           ? requester
             ? "Your entire request fits without moving existing work. You can book it directly."
-            : "Review the planned changes below. Work stays inside your configured hours."
+            : smartFit ? "These are the new times ADA found. Existing bookings stay unchanged; only these dates will be used." : "Review the planned changes below. Work stays inside your configured hours."
           : "Nothing has moved. Existing commitments remain in place."}
       </p>
       {requester && underallocated > 0 && (
@@ -65,13 +70,8 @@ export function ProposalCard({
         ))}
       </ul>
       <div className="proposal-sessions">
-        {proposal.sessions
-          .filter(
-            (s) =>
-              proposal.affectedItemIds.includes(s.workItemId) &&
-              s.status === "planned",
-          )
-          .slice(0, 15)
+        {visibleSessions
+          .slice(0, smartFit ? undefined : 15)
           .map((s) => (
             <div key={s.id}>
               <span>
@@ -97,7 +97,7 @@ export function ProposalCard({
           </p>
         </div>
       )}
-      {(ready || requester) && (
+      {(ready || (requester && !smartFit)) && (
         <button
           type="button"
           className="primary"
@@ -124,12 +124,14 @@ export function WorkForm({
   existing,
   onSaved,
   onClose,
+  onFindTime,
 }: {
   state: AppState;
   date: string;
   existing?: WorkItem;
   onSaved: (state: AppState) => void;
   onClose: () => void;
+  onFindTime?: () => void;
 }) {
   const [item, setItem] = useState<WorkItem>(
     () =>
@@ -137,6 +139,7 @@ export function WorkForm({
       newWorkItem(state.actor, date, { clientId: state.clients[0]?.id || "" }),
   );
   const [exact, setExact] = useState(false);
+  const [fit, setFit] = useState<SmartFitDraft>(() => ({ startDate: date, endDate: date, hours: "1", distribution: "total" }));
   const [sessionDates, setSessionDates] = useState(date);
   const [start, setStart] = useState("09:00");
   const [end, setEnd] = useState("11:00");
@@ -151,6 +154,12 @@ export function WorkForm({
     setItem({ ...item, ...p });
     setProposal(null);
     setOperationId(crypto.randomUUID());
+  }
+  function changeFit(next: SmartFitDraft) {
+    setFit(next);
+    let total: number | null = null;
+    try { total = smartFitTotal(smartFitRequest(next), state.settings); } catch { /* Incomplete draft. */ }
+    patch({ windowStart: next.startDate, windowEnd: next.endDate, estimatedMinutes: total, remainingMinutes: total });
   }
   async function preview(e: React.FormEvent) {
     e.preventDefault();
@@ -186,7 +195,7 @@ export function WorkForm({
             {
               type: "create",
               item,
-              urgent,
+              ...(exact ? { urgent } : { smartFit: smartFitRequest(fit) }),
               ...(exact
                 ? {
                     sessions: sessionDates.split(",").map((d) => ({
@@ -249,6 +258,14 @@ export function WorkForm({
   }
   return (
     <form onSubmit={preview} className="work-form">
+      <fieldset className="work-form-fields" disabled={busy}>
+      {existing && onFindTime && !["completed", "cancelled"].includes(existing.status) && <div className="inset">
+        <p className="micro muted">Just adding hours? Find an opening without changing the project details.</p>
+        <button type="button" className="secondary" disabled={busy} onClick={() => {
+          if (JSON.stringify(item) !== JSON.stringify(existing) && !window.confirm("Discard these unsaved project edits and find a time instead?")) return;
+          onFindTime();
+        }}><Clock3 size={16} /> Find a time for me</button>
+      </div>}
       <div className="form-grid">
         <Field label="Client">
           <select
@@ -334,7 +351,7 @@ export function WorkForm({
             ))}
           </select>
         </Field>
-        <Field
+        {(existing || exact) && <Field
           label={
             existing ? "Remaining effort (hours)" : "Estimated effort (hours)"
           }
@@ -360,8 +377,19 @@ export function WorkForm({
               })
             }
           />
-        </Field>
+        </Field>}
       </div>
+      {!existing && <>
+        <SchedulingMode mode={exact ? "exact" : "smart"} disabled={busy} onChange={mode => {
+          setExact(mode === "exact");
+          setUrgent(false);
+          setError("");
+          if (mode === "smart") changeFit(fit);
+          else { setProposal(null); setOperationId(crypto.randomUUID()); }
+        }} />
+        {!exact && <SmartFitFields value={fit} settings={state.settings} disabled={busy} onChange={changeFit} />}
+      </>}
+      {(existing || exact) && <>
       <div className="form-grid">
         <Field label="Earliest start">
           <input
@@ -383,6 +411,7 @@ export function WorkForm({
           />
         </Field>
       </div>
+      </>}
       <div className="form-grid">
         <Field label="Target finish (optional)">
           <input
@@ -453,17 +482,6 @@ export function WorkForm({
       </Field>
       {!existing && (
         <>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={exact}
-              onChange={(e) => {
-                setExact(e.target.checked);
-                setProposal(null);
-              }}
-            />
-            Choose exact work sessions
-          </label>
           {exact && (
             <div className="inset">
               <Field label="Session dates (YYYY-MM-DD, comma-separated)">
@@ -520,7 +538,7 @@ export function WorkForm({
               </p>
             </div>
           )}
-          {state.actor.role === "owner" && (
+          {exact && state.actor.role === "owner" && (
             <label className="check">
               <input
                 type="checkbox"
@@ -562,6 +580,7 @@ export function WorkForm({
           </button>
         </div>
       )}
+      </fieldset>
     </form>
   );
 }

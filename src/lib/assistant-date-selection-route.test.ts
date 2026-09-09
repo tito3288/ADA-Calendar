@@ -36,6 +36,23 @@ beforeEach(async () => {
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
 describe("selected-date API handoff", () => {
+  it("retains a smart-fit capacity failure so try tomorrow continues the same work", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-09T12:00:00Z"));
+    try {
+      const fitText = "Find time for 8 hours today for a Cedar Studio website task.";
+      const item = newWorkItem(DEMO_MEMBERS[0], "2026-09-09", { id: "cedar-fit", clientId: "cedar", title: "Cedar website", estimatedMinutes: 480, remainingMinutes: 480 });
+      vi.mocked(interpretInput).mockResolvedValueOnce({ kind: "commands", message: "Ready to check", commands: [{ type: "create", item, smartFit: { startDate: "2026-09-09", endDate: "2026-09-09", minutes: 480, distribution: "total" } }] });
+      const response = await send({ text: fitText, operationId: "smart-fit-conflict" });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.interpretation).toMatchObject({ kind: "clarification", commands: [] });
+      expect(body.replyToOperationId).toBe("smart-fit-conflict");
+      expect(store.commit).not.toHaveBeenCalled();
+      await send({ text: "Try tomorrow instead", replyToOperationId: "smart-fit-conflict", operationId: "smart-fit-reply" });
+      expect(interpretInput).toHaveBeenLastCalledWith("Try tomorrow instead", expect.anything(), expect.anything(), expect.objectContaining({ continuation: expect.objectContaining({ turns: [expect.objectContaining({ userText: fitText })] }) }));
+    } finally { vi.useRealTimers(); }
+  });
   it("retains a daily-capacity conflict as a private clarification instead of saving a partial week", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-09-08T13:00:00Z"));

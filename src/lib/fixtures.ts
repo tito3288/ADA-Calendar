@@ -16,7 +16,13 @@ export function createDemoState(now = new Date().toISOString()): AppState {
   const start = nextWorkDate(addDays(today, 1), DEFAULT_SETTINGS);
   const yearMonth = start.slice(0, 7);
   const monthEnd = addDays(`${Number(start.slice(0, 4)) + (start.slice(5, 7) === "12" ? 1 : 0)}-${String(Number(start.slice(5, 7)) % 12 + 1).padStart(2, "0")}-01`, -1);
-  const next = (d: number) => nextWorkDate(addDays(start, d), DEFAULT_SETTINGS);
+  // Count distinct working days. Adding calendar days and then clamping each
+  // weekend date to Monday would stack several fictional sessions together.
+  const next = (offset: number) => {
+    let date = start;
+    for (let day = 0; day < offset; day++) date = nextWorkDate(addDays(date, 1), DEFAULT_SETTINGS);
+    return date;
+  };
   const mk = (id: string, patch: Partial<WorkItem>) => newWorkItem(DEMO_MEMBERS[0], start, { id, ...patch });
   const items: WorkItem[] = [
     mk("drive-software", { clientId: "drive-shine", title: "Oil change survey software", category: "software", webKind: null,

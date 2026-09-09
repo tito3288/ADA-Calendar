@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { LockKeyhole, Plus, Scissors, Trash2 } from "lucide-react";
-import type { AppState, ScheduleProposal, WorkItem } from "@/lib/types";
+import type { AppState, ScheduleProposal, WorkCommand, WorkItem } from "@/lib/types";
+import { smartFitRequest, type SmartFitDraft } from "@/lib/smart-fit";
 import {
   addDays,
   instantMs,
@@ -20,20 +21,28 @@ import {
 import { formatHours } from "@/lib/work";
 import { api, ApiError, Field } from "./ui";
 import { ProposalCard } from "./work-form";
+import { SchedulingMode, SmartFitFields } from "./smart-fit-fields";
 
 export function SessionManager({
   item,
   state,
   onSaved,
   onClose,
+  initialMode = "smart",
 }: {
   item: WorkItem;
   state: AppState;
   onSaved: (state: AppState) => void;
   onClose: () => void;
+  initialMode?: "smart" | "exact";
 }) {
   const zone = state.settings.timeZone;
   const [openedAt] = useState(() => new Date().toISOString());
+  const [mode, setMode] = useState(initialMode);
+  const [fit, setFit] = useState<SmartFitDraft>(() => {
+    const today = localDate(openedAt, zone);
+    return { startDate: today, endDate: today, hours: "2", distribution: "total" };
+  });
   const original = state.sessions
     .filter(
       (session) =>
@@ -44,7 +53,7 @@ export function SessionManager({
     original.map((session) => sessionDraft(session, zone)),
   );
   const [overrideProtected, setOverrideProtected] = useState(false);
-  const [resume, setResume] = useState(false);
+  const [resume, setResume] = useState(initialMode === "smart" && item.status === "waiting");
   const [proposal, setProposal] = useState<ScheduleProposal | null>(null);
   const [operationId, setOperationId] = useState(() => crypto.randomUUID());
   const [busy, setBusy] = useState(false);
@@ -131,7 +140,7 @@ export function SessionManager({
     setError("");
     setProposal(null);
     try {
-      const commands = sessionManagementCommands({
+      const commands: WorkCommand[] = mode === "smart" ? [{ type: "fit", itemId: item.id, request: { ...smartFitRequest(fit), resumeWaiting: resume } }] : sessionManagementCommands({
         item,
         original,
         rows,
@@ -182,9 +191,9 @@ export function SessionManager({
         <span>Changes are drafts until confirmed.</span>
       </div>
       <p className="micro muted">
-        Add a day, split a block, or move hours between rows. ADA checks lunch,
-        available hours, minimum focus time, and conflicts before saving.
+        {mode === "smart" ? "Add time to this project without choosing a start time or moving existing bookings." : "Edit, split, or move existing sessions. ADA checks lunch, available hours, minimum focus time, and conflicts before saving."}
       </p>
+      <SchedulingMode mode={mode} disabled={busy} onChange={next => { setMode(next); invalidate(); }} />
       <div className="session-manager-budget" aria-live="polite">
         <strong>
           {completeRows ? formatHours(reserved) : "—"} in future sessions
@@ -195,7 +204,7 @@ export function SessionManager({
             : `${formatHours(item.remainingMinutes)} remaining effort — unchanged`}
         </span>
       </div>
-      {item.dailyPlan?.length ? (
+      {mode === "exact" && item.dailyPlan?.length ? (
         <p className="notice micro">
           Saving redistributes this project’s daily-hour plan to match these
           future sessions. Past bookings are kept as history.
@@ -208,6 +217,7 @@ export function SessionManager({
         </p>
       )}
       <fieldset disabled={busy} className="session-manager-fields">
+        {mode === "smart" ? <SmartFitFields value={fit} settings={state.settings} onChange={next => { setFit(next); invalidate(); }} /> : <>
         {rows.map((row, index) => (
           <div
             className={`session-manager-row ${locked(row) ? "session-manager-history" : ""}`}
@@ -309,6 +319,7 @@ export function SessionManager({
             above.
           </label>
         )}
+        </>}
         {item.status === "waiting" && (
           <label className="check session-manager-override">
             <input
@@ -340,10 +351,10 @@ export function SessionManager({
         <button
           type="button"
           className="primary"
-          disabled={busy || (changedProtected && !overrideProtected)}
+          disabled={busy || (mode === "exact" && changedProtected && !overrideProtected)}
           onClick={preview}
         >
-          {busy ? "Checking…" : "Preview session changes"}
+          {busy ? "Checking…" : mode === "smart" ? "Find available times" : "Preview session changes"}
         </button>
       </div>
       {proposal && (

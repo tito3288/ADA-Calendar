@@ -46,6 +46,7 @@ import { formatHours } from "@/lib/work";
 import { CalendarContent, type CalendarView } from "./calendar";
 import { api, ApiError, dateLabel, Empty, Field, Modal, timeLabel } from "./ui";
 import { WorkForm, ProposalCard } from "./work-form";
+import { SessionManager } from "./session-manager";
 import { WorkDetails } from "./work-details";
 import {
   AssistantPanel,
@@ -165,6 +166,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState(false);
+  const [findingTime, setFindingTime] = useState(false);
   const [editing, setEditing] = useState(false);
   const [assistant, setAssistant] = useState(false);
   const [assistantDraft, setAssistantDraft] = useState(emptyAssistantDraft);
@@ -1286,10 +1288,11 @@ export function Workspace({ initialState }: { initialState: AppState }) {
           existing={editing ? selected : undefined}
           onSaved={update}
           onClose={() => setForm(false)}
+          onFindTime={editing ? () => { setForm(false); setFindingTime(true); } : undefined}
         />
       </Modal>
       <Modal
-        open={!!selected && !form}
+        open={!!selected && !form && !findingTime}
         onClose={() => setSelectedId(null)}
         title={selected?.title || "Work details"}
         wide
@@ -1307,6 +1310,9 @@ export function Workspace({ initialState }: { initialState: AppState }) {
             onCommand={command}
           />
         )}
+      </Modal>
+      <Modal open={!!selected && findingTime} onClose={() => setFindingTime(false)} title={selected ? `Find time · ${selected.title}` : "Find a time for me"} wide>
+        {selected && <SessionManager key={selected.id} item={selected} state={state} onSaved={update} onClose={() => setFindingTime(false)} />}
       </Modal>
       <Modal
         open={confirmNewSelection}

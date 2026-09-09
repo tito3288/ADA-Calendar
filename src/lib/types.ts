@@ -32,8 +32,14 @@ export interface ScheduleSnapshot {
   workspaceId: string; version: number; settings: WorkspaceSettings; clients: Client[];
   priorities: Priority[]; items: WorkItem[]; sessions: WorkSession[]; blocks: UnavailableBlock[];
 }
+/** Additional reservations only; this is not an estimate of the whole project. */
+export interface SmartFitRequest {
+  startDate: string; endDate: string; minutes: number;
+  distribution: "total" | "per_day"; resumeWaiting?: boolean;
+}
 export type WorkCommand =
-  | { type: "create"; item: WorkItem; sessions?: WorkSession[]; urgent?: boolean; overrideProtected?: boolean; overrideDeadline?: boolean }
+  | { type: "create"; item: WorkItem; sessions?: WorkSession[]; smartFit?: SmartFitRequest; urgent?: boolean; overrideProtected?: boolean; overrideDeadline?: boolean }
+  | { type: "fit"; itemId: string; request: SmartFitRequest }
   | { type: "update"; itemId: string; patch: Partial<WorkItem>; overrideProtected?: boolean; overrideDeadline?: boolean }
   | { type: "schedule"; itemId: string; sessions?: WorkSession[]; urgent?: boolean; overrideProtected?: boolean; overrideDeadline?: boolean }
   | { type: "move"; sessionId: string; start: string; end: string; overrideProtected?: boolean; overrideDeadline?: boolean }

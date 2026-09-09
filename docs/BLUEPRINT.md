@@ -28,6 +28,15 @@ Bryan wears four hats: Web (edits/builds), IT, Landings, and Software. Kyle, Wil
 - New external bookings and priority requests notify Bryan. Email links require login. Preview/failed transaction causes no work event/mail. Successful undo causes a corrective event; sent email cannot be recalled.
 - Attach Markdown/PDF/PNG/JPEG/WebP, max five files and 20 MB per work item. Safe Markdown preview, immutable private originals, recoverable removal, external references. Audio uses separate transient private storage.
 
+## September 9: Find a time for me
+
+- New manual work defaults to **Find a time for me**: choose one day or an inclusive range, plus total hours or hours each configured working day. **Choose exact times** remains available.
+- Existing projects expose **Find a time for me**, and Edit work offers the same shortcut. The owner can book additional hours without changing the project estimate or display span. Unknown totals remain unknown. Waiting projects resume only with explicit booking authorization; manual previews show that choice before confirmation.
+- Smart fit appends reservations through the shared scheduler. It never moves existing sessions, uses protected/reserve time, or silently books outside the requested range. A failed fit is all-or-nothing. Work hours, lunch, unavailable blocks, elapsed time, focus minimums, allowed dates, daily quotas and firm deadlines remain authoritative.
+- Known projects may reserve only their unreserved remaining effort; increasing the estimate is a separate explicit edit. A partial booking does not imply a project finish. New daily requests persist their daily quotas. Existing daily plans are not silently redistributed by an add-time request.
+- Typing and voice use the same grounded path: “Find time for 2 hours today for Oil Survey system” adds only that booking. The model supplies intent, not clock-slot authority. Failed fits retain private clarification context, so “Try tomorrow” can continue with the same project and hours. Explicit clock ranges still use exact-session validation.
+- Manual changes are previewed and confirmed. Clear authorized Ask ADA instructions retain the existing automatic-save behavior. Requesters may smart-fit new estimated work only; they cannot add hours to existing projects. Preview version/fingerprint checks, server revalidation, atomic persistence and idempotency apply unchanged. No new database fields or migration are required.
+
 ## Architecture contract
 
 `src/lib/types.ts` defines WorkCommand, ScheduleSnapshot, ScheduleProposal, WorkEvent and AppState. Pure TypeScript scheduling is independent of providers. Model tools propose domain commands, never raw database/email operations. All mutation paths revalidate authorization, schedule version and constraints.

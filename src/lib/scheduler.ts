@@ -6,6 +6,7 @@ import {
   addDays, addMinutes, ceilToSlot, dayOfWeek, instantFromMs, instantMs, isDate, isInstant,
   localDate, localDateTime, maxDate, minutesBetween,
 } from "./time";
+import { commandSchema } from "./schemas";
 
 type Interval = { start: number; end: number };
 type PlanOptions = { now?: string; operationId?: string; approveDisplacement?: boolean };
@@ -114,7 +115,7 @@ function target(item: WorkItem): string | null {
   return [item.targetDate, item.windowEnd, item.deadline].filter((date): date is string => !!date).sort()[0] ?? null;
 }
 
-function allocation(snapshot: ScheduleSnapshot, item: WorkItem, now: string, options: { useReserve?: boolean; ignore?: Set<string>; until?: string; from?: string } = {}): Allocation {
+function allocation(snapshot: ScheduleSnapshot, item: WorkItem, now: string, options: { useReserve?: boolean; ignore?: Set<string>; until?: string; from?: string; additionalMinutes?: number; dailyLimits?: Map<string, number> } = {}): Allocation {
   if (item.dailyPlan?.length && liveItem(item)) {
     // Resolve each quota separately. Neither a soft target nor an automatic replan
     // may turn a daily instruction into an earliest-fit total.
@@ -131,7 +132,7 @@ function allocation(snapshot: ScheduleSnapshot, item: WorkItem, now: string, opt
   const ignore = options.ignore ?? new Set<string>();
   const existing = snapshot.sessions.filter((session) => session.workItemId === item.id && !ignore.has(session.id));
   const reservedEffort = Math.ceil((item.remainingMinutes ?? 0) / snapshot.settings.slotMinutes) * snapshot.settings.slotMinutes;
-  let missing = Math.max(0, Math.ceil((reservedEffort - existing.reduce((sum, session) => sum + futureMinutes(session, now), 0)) / snapshot.settings.slotMinutes) * snapshot.settings.slotMinutes);
+  let missing = options.additionalMinutes ?? Math.max(0, Math.ceil((reservedEffort - existing.reduce((sum, session) => sum + futureMinutes(session, now), 0)) / snapshot.settings.slotMinutes) * snapshot.settings.slotMinutes);
   if (!liveItem(item) || missing === 0) return { sessions: [], missing: 0 };
   const first = maxDate(item.windowStart, localDate(now, snapshot.settings.timeZone), options.from ?? item.windowStart);
   const last = [addDays(first, HORIZON_DAYS), item.deadline, options.until].filter((date): date is string => !!date).sort()[0];
@@ -140,9 +141,10 @@ function allocation(snapshot: ScheduleSnapshot, item: WorkItem, now: string, opt
   const minimum = Math.max(snapshot.settings.slotMinutes, Math.ceil(item.minimumSessionMinutes / snapshot.settings.slotMinutes) * snapshot.settings.slotMinutes);
   for (let date = first; date <= last && missing > 0; date = addDays(date, 1)) {
     if (allowed.size && !allowed.has(date)) continue;
+    let dailyRoom = options.dailyLimits?.get(date) ?? (options.dailyLimits ? 0 : Number.POSITIVE_INFINITY);
     for (const free of freeIntervals(snapshot, date, now, !!options.useReserve, ignore)) {
       const alignedStart = instantMs(ceilToSlot(instantFromMs(free.start), date, snapshot.settings));
-      const available = Math.floor(duration({ start: alignedStart, end: free.end }) / snapshot.settings.slotMinutes) * snapshot.settings.slotMinutes;
+      const available = Math.min(dailyRoom, Math.floor(duration({ start: alignedStart, end: free.end }) / snapshot.settings.slotMinutes) * snapshot.settings.slotMinutes);
       const effectiveMinimum = Math.min(minimum, missing);
       if (available < effectiveMinimum) continue;
       let take = Math.min(available, missing);
@@ -152,6 +154,7 @@ function allocation(snapshot: ScheduleSnapshot, item: WorkItem, now: string, opt
       const start = instantFromMs(alignedStart);
       sessions.push({ id: uuid(), workItemId: item.id, start, end: addMinutes(start, take), protected: false, status: "planned", usesReserve: !!options.useReserve });
       missing -= take;
+      dailyRoom -= take;
       if (missing <= 0) break;
     }
   }
@@ -332,6 +335,107 @@ function trimExcess(snapshot: ScheduleSnapshot, item: WorkItem, now: string, ove
   return null;
 }
 
+/** Smart fitting is an append-only scheduling operation, not ordinary replanning.
+ * Keep it separate so a priority, target, or adjacent edit cannot authorize displacement. */
+function planSmartFits(snapshot: ScheduleSnapshot, commands: WorkCommand[], actor: Actor, now: string, result: ScheduleProposal): ScheduleProposal {
+  const draft = clone(snapshot);
+  const summary: string[] = [];
+  const changed = new Set<string>();
+  const fail = (errors: ScheduleConflict[]): ScheduleProposal => ({ ...result, status: "infeasible", conflicts: errors });
+  try {
+    for (const input of commands) {
+      const parsed = commandSchema.safeParse(input);
+      if (!parsed.success) return fail([conflict("invalid_smart_fit", "Smart fit needs valid dates, a range of at most 366 days, and positive hours in 15-minute increments.")]);
+      const command = parsed.data;
+      if (command.type !== "fit" && !(command.type === "create" && command.smartFit))
+        return fail([conflict("smart_fit_mixed_commands", "Preview smart-fit additions separately from other edits or rescheduling. Existing bookings will stay unchanged.")]);
+      if (command.type === "create" && (command.sessions !== undefined || command.urgent || command.overrideProtected || command.overrideDeadline))
+        return fail([conflict("smart_fit_override", "Smart fit uses open time only. Do not combine it with exact sessions or override permissions.")]);
+      const request = command.type === "fit" ? command.request : command.smartFit!;
+      let item: WorkItem;
+      if (command.type === "create") {
+        item = clone(command.item);
+        if (draft.items.some(old => old.id === item.id)) return fail([conflict("duplicate_item", "This work item already exists.", [item.id])]);
+        if (actor.role === "requester") {
+          if (item.estimatedMinutes === null || item.estimatedMinutes <= 0)
+            return fail([conflict("missing_estimate", "New requests need a positive effort estimate.", [item.id])]);
+          item.requestedPriorityId = item.requestedPriorityId ?? item.priorityId;
+          item.priorityId = snapshot.priorities.find(priority => priority.id === "normal")?.id ?? snapshot.priorities.find(priority => priority.rank === 2)?.id ?? snapshot.priorities.at(-1)?.id ?? "normal";
+          item.requesterId = actor.id; item.requestedBy = actor.name;
+          item.status = "planned"; item.remainingMinutes = item.estimatedMinutes; item.completedAt = null;
+          item.progressCompleted = 0; item.checklist = item.checklist.map(entry => ({ ...entry, done: false }));
+        }
+        item.createdAt = now; item.updatedAt = now; item.forecastDate = null;
+        draft.items.push(item);
+      } else {
+        const existing = draft.items.find(candidate => candidate.id === command.itemId);
+        if (!existing) return fail([conflict("unknown_work", "Choose an existing project before fitting more hours.", [command.itemId])]);
+        item = existing;
+      }
+      if (item.status === "waiting") {
+        if (!request.resumeWaiting) return fail([conflict("smart_fit_waiting", `Confirm that “${item.title}” should resume when these hours are booked.`, [item.id])]);
+        item.status = "planned"; item.blockedReason = null; item.completedAt = null;
+      }
+      if (!liveItem(item)) return fail([conflict("inactive_work", `Reopen “${item.title}” before adding work sessions.`, [item.id])]);
+
+      const workingDates: string[] = [];
+      for (let date = request.startDate; date <= request.endDate; date = addDays(date, 1))
+        if (draft.settings.weekdays.includes(dayOfWeek(date))) workingDates.push(date);
+      if (!workingDates.length) return fail([conflict("smart_fit_dates", "The selected range contains no working days. Choose a workday; no hours were booked.", [item.id])]);
+      const eligible = workingDates.filter(date => date >= item.windowStart && (!item.deadline || date <= item.deadline) && (!item.allowedDates.length || item.allowedDates.includes(date)));
+      if (!eligible.length || request.distribution === "per_day" && eligible.length !== workingDates.length)
+        return fail([conflict("outside_allowed_dates", "These hours must fit the project’s earliest start, allowed work dates, and firm deadline. Adjust the selected range; nothing has changed.", [item.id])]);
+      const requestedMinutes = request.minutes * (request.distribution === "per_day" ? workingDates.length : 1);
+      if (requestedMinutes > 100_000) return fail([conflict("invalid_smart_fit", "The requested bookings exceed the supported 100,000-minute total.", [item.id])]);
+      if (command.type === "create" && request.distribution === "per_day") {
+        const dailyPlan = workingDates.map(date => ({ date, minutes: request.minutes }));
+        if (item.dailyPlan?.length && JSON.stringify([...item.dailyPlan].sort((a, b) => a.date.localeCompare(b.date))) !== JSON.stringify(dailyPlan))
+          return fail([conflict("daily_hours", "The new project’s daily plan disagrees with its smart-fit hours. Use one consistent daily amount.", [item.id])]);
+        // This is a new project and the per-day budget was explicitly requested.
+        // Persist it so later scheduling never packs these hours into fewer days.
+        item.dailyPlan = dailyPlan;
+      }
+      const itemErrors = itemConflicts(draft, item);
+      if (itemErrors.length) return fail(itemErrors);
+      const alreadyReserved = draft.sessions.filter(session => session.workItemId === item.id).reduce((sum, session) => sum + futureMinutes(session, now), 0);
+      if (item.remainingMinutes !== null && alreadyReserved + requestedMinutes > Math.ceil(item.remainingMinutes / draft.settings.slotMinutes) * draft.settings.slotMinutes)
+        return fail([conflict("smart_fit_effort", `“${item.title}” has only ${Number((Math.max(0, item.remainingMinutes - alreadyReserved) / 60).toFixed(2))} unreserved remaining hours. Update its remaining-effort estimate separately before booking more; the estimate has not changed.`, [item.id])]);
+      if (command.type === "create" && item.remainingMinutes !== null && requestedMinutes === Math.ceil(item.remainingMinutes / draft.settings.slotMinutes) * draft.settings.slotMinutes) {
+        // The whole new task was assigned to this work window. Persist that
+        // boundary so a later ordinary replan cannot move it outside the dates.
+        // An ongoing project's first chunk is different: unknown/partial work
+        // must remain open for later bookings on other dates.
+        item.allowedDates = eligible;
+      }
+      const dailyLimits = item.dailyPlan?.length ? new Map(item.dailyPlan.map(day => [day.date, Math.max(0, day.minutes - draft.sessions.filter(session => session.workItemId === item.id && localDate(session.start, draft.settings.timeZone) === day.date).reduce((sum, session) => sum + futureMinutes(session, now), 0))])) : undefined;
+      const chunks = request.distribution === "per_day" ? workingDates.map(date => ({ dates: [date], minutes: request.minutes })) : [{ dates: eligible, minutes: request.minutes }];
+      for (const chunk of chunks) {
+        const schedulingItem = { ...item, dailyPlan: undefined, allowedDates: chunk.dates, windowStart: chunk.dates[0] };
+        if (request.distribution === "per_day" && item.dailyPlan?.length)
+          schedulingItem.minimumSessionMinutes = Math.min(item.minimumSessionMinutes, chunk.minutes);
+        const found = allocation(draft, schedulingItem, now, { additionalMinutes: chunk.minutes, until: chunk.dates.at(-1), dailyLimits });
+        if (found.missing) return fail([conflict("smart_fit_capacity", `“${item.title}” cannot fit ${Number((chunk.minutes / 60).toFixed(2))} hours ${chunk.dates.length === 1 ? `on ${chunk.dates[0]}` : `from ${request.startDate} through ${request.endDate}`} in the available focus blocks. Lunch, meetings, existing bookings, daily limits, and elapsed time are kept clear. Choose different dates, fewer hours, or a smaller minimum focus session; nothing has changed.`, [item.id])]);
+        draft.sessions.push(...found.sessions);
+      }
+      item.updatedAt = now;
+      changed.add(item.id);
+      summary.push(`${command.type === "create" ? "Added" : "Booked more time for"} ${item.title}: ${Number((requestedMinutes / 60).toFixed(2))}h ${request.distribution === "per_day" ? `(${Number((request.minutes / 60).toFixed(2))}h each working day)` : "total"} from ${request.startDate} through ${request.endDate}. Existing bookings stay unchanged.${item.remainingMinutes === null ? " The project total stays unknown." : ""}`);
+    }
+    const errors = validateSchedule(draft, now);
+    if (errors.length) return fail(errors.map(error => error.code === "focus_length" ? { ...error, message: `${error.message} Smart fit leaves existing sessions unchanged; adjust the minimum focus length or use Manage sessions to rearrange the short sessions before booking more.` } : error));
+    refreshForecasts(draft, now, changed);
+    // A last booked date is not a finish forecast when this append leaves some
+    // estimated effort unreserved. Smart fit never schedules that remainder.
+    for (const item of draft.items.filter(item => changed.has(item.id) && item.remainingMinutes !== null)) {
+      const reserved = draft.sessions.filter(session => session.workItemId === item.id).reduce((sum, session) => sum + futureMinutes(session, now), 0);
+      if (reserved < Math.ceil(item.remainingMinutes! / draft.settings.slotMinutes) * draft.settings.slotMinutes) item.forecastDate = null;
+    }
+    return { ...result, items: draft.items, sessions: draft.sessions, blocks: draft.blocks, affectedItemIds: [...changed], summary };
+  } catch (error) {
+    return fail([conflict("invalid_smart_fit", error instanceof Error ? error.message : "The requested smart-fit booking is invalid.")]);
+  }
+}
+
 /** Pure, deterministic placement decisions. IDs identify the proposal; callers MUST
  * commit against baseVersion atomically and rerun this function after any version race. */
 export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[], actor: Actor, options: PlanOptions = {}): ScheduleProposal {
@@ -343,6 +447,8 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
   if (settingsErrors.length) return fail(settingsErrors);
   if (actor.role !== "owner" && commands.some((command) => command.type !== "create")) return fail([conflict("forbidden", "Requesters can submit new work, but cannot edit existing work.")]);
   if (actor.role !== "owner" && commands.some((command) => ("overrideProtected" in command && command.overrideProtected) || ("overrideDeadline" in command && command.overrideDeadline))) return fail([conflict("forbidden", "Only Bryan can authorize protected-time or deadline overrides.")]);
+  if (commands.some(command => command.type === "fit" || command.type === "create" && command.smartFit))
+    return planSmartFits(snapshot, commands, actor, now, result);
   const draft = clone(snapshot);
   const scheduleIds = new Set<string>();
   const explicitIds = new Set<string>();

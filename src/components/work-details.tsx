@@ -203,6 +203,7 @@ export function WorkDetails({
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [managingSessions, setManagingSessions] = useState(false);
+  const [sessionMode, setSessionMode] = useState<"smart" | "exact">("smart");
   const [preview, setPreview] = useState<string | null>(null);
   const [checklistTitle, setChecklistTitle] = useState("");
   const [override, setOverride] = useState(false);
@@ -385,12 +386,18 @@ export function WorkDetails({
           Work sessions <span>{sessions.length}</span>
         </h3>
         {owner && item.status !== "completed" && item.status !== "cancelled" && !managingSessions && (
-          <button className="secondary" onClick={() => { setEditing(null); setManagingSessions(true); }}>
-            <Pencil size={14} /> Manage sessions
-          </button>
+          <div className="session-manager-entry">
+            <button className="primary" onClick={() => { setEditing(null); setSessionMode("smart"); setManagingSessions(true); }}>
+              <Clock3 size={14} /> Find a time for me
+            </button>
+            <button className="secondary" onClick={() => { setEditing(null); setSessionMode("exact"); setManagingSessions(true); }}>
+              <Pencil size={14} /> Manage sessions
+            </button>
+            <span className="micro muted">Add hours to this project, or choose exact times to manage sessions.</span>
+          </div>
         )}
         {managingSessions ? (
-          <SessionManager item={item} state={state} onSaved={onState} onClose={() => setManagingSessions(false)} />
+          <SessionManager item={item} state={state} initialMode={sessionMode} onSaved={onState} onClose={() => setManagingSessions(false)} />
         ) : sessions.length ? (
           sessions.map((s) => (
             <div key={s.id}>
@@ -472,7 +479,7 @@ export function WorkDetails({
           </p>
         )}
         {owner && !managingSessions && item.remainingMinutes === null && item.status !== "completed" && item.status !== "cancelled" && (
-          <p className="micro muted">Use Manage sessions to add dates and times, or ask ADA. The project total can stay unknown.</p>
+          <p className="micro muted">Use Find a time for me to add hours, or ask ADA. The project total can stay unknown.</p>
         )}
         {owner && !managingSessions && item.remainingMinutes !== null && item.status !== "waiting" && item.status !== "completed" && item.status !== "cancelled" && (
           <button

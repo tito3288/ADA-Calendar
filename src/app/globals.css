@@ -1845,6 +1845,28 @@ small {
   margin: 9px 0;
 }
 .session-manager { margin-top: 14px; }
+.work-form-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.scheduling-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 18px 0; }
+.scheduling-mode > button { display: flex; align-items: flex-start; gap: 10px; padding: 16px; text-align: left; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); min-width: 0; }
+.scheduling-mode > button[aria-pressed="true"] { background: #21372c; border-color: #83b39b; color: #c7e9d8; }
+.scheduling-mode strong { display: block; font-size: 12px; line-height: 1.5; }
+.scheduling-mode small { display: block; color: var(--muted); font-size: 11px; line-height: 1.6; margin-top: 4px; }
+.scheduling-mode svg { flex-shrink: 0; margin-top: 2px; }
+.smart-fit-fields { border: 0; padding: 0; margin: 20px 0 0; min-width: 0; }
+.smart-fit-heading { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.smart-fit-quick-days { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 14px 0 18px; }
+.smart-fit-quick-days .check { margin: 0; min-height: 44px; }
+.smart-fit-quick-days button, .smart-fit-fields input, .smart-fit-fields select { min-height: 44px; }
+.smart-fit-fields input, .smart-fit-fields select { min-width: 0; max-width: 100%; }
+.smart-fit-summary { padding: 12px 14px; border-left: 2px solid #83b39b; background: #a5d6ba0a; color: #c7e9d8; font-size: 12px; line-height: 1.7; }
+.session-manager-entry { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 16px; }
+.session-manager-entry > span { flex-basis: 100%; }
+@media (max-width: 520px) {
+  .scheduling-mode { grid-template-columns: 1fr; }
+  .scheduling-mode > button { padding: 14px; }
+  .smart-fit-fields .form-grid { grid-template-columns: 1fr; }
+  .session-manager-entry > button { min-height: 44px; }
+}
 .session-manager-heading,
 .session-manager-budget,
 .session-manager-row-title,

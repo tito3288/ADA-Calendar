@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
-import type { Actor, AppState, Category, Interpretation, ScheduleSnapshot, WorkCommand, WorkItem, WorkSession } from "../types";
+import type { Actor, AppState, Category, Interpretation, ScheduleSnapshot, SmartFitRequest, WorkCommand, WorkItem, WorkSession } from "../types";
 import { interpretationEstimatedUsd } from "../ai-cost";
 import { conversationText, isConversationCancellation, type AssistantContinuation } from "../assistant-conversation";
 import { dateSelectionSchema, type AssistantDateSelection } from "../assistant-date-selection";
@@ -15,6 +15,8 @@ import { projectMonthSpan } from "../assistant-project-span";
 import { projectMonthEvidence, retainedCreateEvidence, separateWorkRequested, waitingWorkRequested } from "../assistant-work-context";
 import { localClockMinutes, statedClockRanges, unknownProjectEffort } from "../assistant-session-context";
 import { dailyHoursPlan } from "../assistant-daily-hours";
+import { asksToFindTime, statedFitMinutes } from "../assistant-smart-fit";
+import { dayOfWeek } from "../time";
 
 export const ASSISTANT_MODEL = "gpt-5.6-sol";
 export const TRANSCRIPTION_MODEL = "gpt-transcribe";
@@ -29,7 +31,7 @@ const sessionSchema = z.object({ start: z.string(), end: z.string(), protected: 
 // All fields are required/nullable for the Responses strict JSON Schema contract.
 // The model does not choose actor IDs, permissions, recipient lists, or override flags.
 export const assistantActionSchema = z.object({
-  type: z.enum(["create", "update", "schedule", "move", "progress", "status", "client_update", "block"]),
+  type: z.enum(["create", "fit", "update", "schedule", "move", "progress", "status", "client_update", "block"]),
   sourceQuote: z.string(), clientName: nullableText, itemReference: nullableText, sessionId: nullableText,
   title: nullableText, description: nullableText, category: z.enum(["web", "it", "landings", "software"]).nullable(),
   webKind: z.enum(["edit", "build"]).nullable(), priorityLabel: nullableText,
@@ -209,6 +211,31 @@ export function compileInterpretation(raw: unknown, text: string, state: Context
     const createEvidence = action.type === "create"
       ? retainedCreateEvidence(action.sourceQuote, text, authorityText, action.title, client, state.clients, output.actions.length)
       : action.sourceQuote;
+    const briefAmountReply = /^(?:please\s+)?(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|half|an?|a)\s*(?:hours?|hrs?|minutes?|mins?)(?:\s+(?:please|instead))?[.!]?$/i.test(authorityText.trim());
+    const fitSource = output.actions.length === 1 && authorityText !== text && (/\b(?:sorry|meant|correction|actually|instead|try)\b/i.test(authorityText) || briefAmountReply) && hasEffort(authorityText)
+      ? authorityText : createEvidence;
+    const wantsFit = asksToFindTime(createEvidence, action.type !== "create");
+    if (action.type === "fit" && !wantsFit) return clarify("Should I find an open time for this project? Tell me the day and how many hours to book.");
+    const legacyDailyAllocation = action.type === "schedule" && /\b(?:each|every|daily|per day|evenly|equally)\b/i.test(createEvidence)
+      && !asksToFindTime(createEvidence) && !/\b(?:add|another|additional|more|extra|book)\b/i.test(createEvidence);
+    const automaticFit = ["fit", "schedule", "update", "create"].includes(action.type) && wantsFit && !statedClockRanges(createEvidence).length && !legacyDailyAllocation;
+    if (wantsFit && statedClockRanges(createEvidence).length && !action.sessions.length)
+      return clarify("You specified exact times. Should I reserve those times, or find any available time on the chosen day?");
+    if (automaticFit && /\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b(?:before|after|at)\s+(?:noon|midnight|\d{1,2}:\d{2})\b/i.test(createEvidence))
+      return clarify("You mentioned a clock-time restriction. Use exact session times for that restriction, or let me find any open time on the chosen days.");
+    if (automaticFit && /\b(?:each|every)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(createEvidence))
+      return clarify("Please select the specific dates for that repeating weekday, or book one date at a time. I won't spread those hours onto other weekdays.");
+    if (action.type === "fit" && !automaticFit) action.type = "schedule";
+    // A request to find an open slot never authorizes model-invented clock
+    // times. Ignore those proposals; only the shared scheduler chooses slots.
+    if (automaticFit) action.sessions = [];
+    if (automaticFit && dateSelection?.kind === "project_span") return clarify("Choose a work window for these hours, rather than a display-only project timeline.");
+    const fitDateSource = correctedDateSource ?? createEvidence;
+    const mentionedDates = fitDateSource.match(/\b\d{4}-\d{2}-\d{2}\b/g) ?? [];
+    const simpleFitDate = /\btomorrow\b/i.test(fitDateSource) && !/\btoday\b/i.test(fitDateSource) ? addDays(today, 1)
+      : /\btoday\b/i.test(fitDateSource) && !/\btomorrow\b/i.test(fitDateSource) ? today : mentionedDates.length === 1 ? mentionedDates[0] : null;
+    if (automaticFit && !dateSelection && !action.windowStart && simpleFitDate) action.windowStart = simpleFitDate;
+    if (automaticFit && !dateSelection && !action.windowEnd && simpleFitDate && !/\b(?:through|until|between|next week)\b/i.test(fitDateSource)) action.windowEnd = simpleFitDate;
     const waitingRequested = waitingWorkRequested(createEvidence);
     const unknownTotal = action.type === "create" && actor.role === "owner" && unknownProjectEffort(createEvidence);
     if (action.type === "create" && actor.role === "requester" && unknownProjectEffort(createEvidence))
@@ -216,7 +243,7 @@ export function compileInterpretation(raw: unknown, text: string, state: Context
     const explicitlyUnscheduled = /\b(?:unscheduled|on hold|without reserving|(?:keep|leave|save|mark)\b[^.!?\n]{0,40}\bwaiting)\b/i.test(createEvidence);
     const dailySource = output.actions.length === 1 && authorityText !== text && /\b(?:each|every|daily|per day|evenly|equally)\b/i.test(authorityText) ? authorityText : createEvidence;
     const singleDayCorrection = /\b(?:only|just)\b/i.test(authorityText) && action.windowStart !== null && action.windowStart === action.windowEnd && matchesDate(action.windowStart, authorityText, false);
-    const daily = ["create", "update", "schedule"].includes(action.type)
+    const daily = ["create", "update", "schedule", "fit"].includes(action.type)
       ? dailyHoursPlan(dailySource, dateSelection?.kind === "work_window" && !singleDayCorrection ? dateSelection.start : action.windowStart,
         dateSelection?.kind === "work_window" && !singleDayCorrection ? dateSelection.end : action.windowEnd, dateSelection?.kind === "work_window" ? [] : action.allowedDates, state.settings.weekdays) : {};
     if (daily.error) return clarify(daily.error);
@@ -224,7 +251,7 @@ export function compileInterpretation(raw: unknown, text: string, state: Context
     // A model may omit or misread the multiplication; derive it from grounded
     // user language. Unknown project totals stay unknown.
     if (daily.plan && action.type === "create" && !unknownTotal) action.estimatedMinutes = daily.total!;
-    const sessionOnly = unknownTotal && !explicitlyUnscheduled && (action.sessions.length > 0 || Boolean(daily.plan));
+    const sessionOnly = unknownTotal && !explicitlyUnscheduled && (action.sessions.length > 0 || Boolean(daily.plan) || automaticFit);
     const existingSessionOnly = action.type === "schedule" && item?.remainingMinutes === null;
     const timelineOnly = dateSelection?.kind === "project_span" && action.type === "create" && !action.sessions.length;
     const waiting = action.type === "create" && actor.role === "owner" && !sessionOnly && (timelineOnly || (waitingRequested && (unknownTotal || action.estimatedMinutes === null || action.status === "waiting")));
@@ -250,9 +277,28 @@ export function compileInterpretation(raw: unknown, text: string, state: Context
       return clarify("The proposed work falls outside the selected dates. Change the selection or keep the work within it. Nothing has been scheduled.");
     if (dateSelection?.kind === "project_span" && action.type !== "create")
       return clarify("Project timeline selection currently applies to new projects. Use Edit work for an existing project's timeline, or choose a work window for a session.");
-    if (dateSelection && action.type === "schedule" && !action.sessions.length && !daily.plan)
+    if (dateSelection && action.type === "schedule" && !action.sessions.length && !daily.plan && !automaticFit)
       return clarify("For an existing project, give the session start and end times within the selected dates.");
     if (action.windowStart && action.windowEnd && action.windowEnd < action.windowStart) return clarify("The end of the work window must be on or after its start.");
+    let smartFit: SmartFitRequest | undefined;
+    if (automaticFit) {
+      if (explicitlyUnscheduled) return clarify("Should I book these hours and resume the project, or keep it waiting with no reservations?");
+      const startDate = dateSelection?.kind === "work_window" ? action.windowStart && matchesDate(action.windowStart, displayEvidence, false) ? action.windowStart : dateSelection.start : action.windowStart;
+      const endDate = dateSelection?.kind === "work_window" ? action.windowEnd && matchesDate(action.windowEnd, displayEvidence, false) ? action.windowEnd : dateSelection.end : action.windowEnd;
+      if (!startDate || !endDate) return clarify("Which day or date range should I find time in? You can say today, tomorrow, or select the dates on the calendar.");
+      if (!dateSelection && correctedDateSource && [startDate, endDate].some(date => !groundedDate(date, correctedDateSource, today, false)))
+        return clarify("Please confirm the new booking day; I won't reuse the earlier dates after your correction.");
+      if (daily.plan?.some(day => !state.settings.weekdays.includes(dayOfWeek(day.date))))
+        return clarify("That daily plan includes a non-working day. Choose working days, or say weekdays only; I won't silently skip a requested day.");
+      const amount = daily.plan ? { minutes: daily.plan[0].minutes } : statedFitMinutes(fitSource);
+      if (amount.error || amount.minutes === undefined) return clarify(amount.error!);
+      smartFit = { startDate, endDate, minutes: amount.minutes, distribution: daily.plan ? "per_day" : "total", ...(item?.status === "waiting" ? { resumeWaiting: true } : {}) };
+      if (action.type !== "create" && item) {
+        commands.push({ type: "fit", itemId: item.id, request: smartFit });
+        continue;
+      }
+      if (!unknownTotal) action.estimatedMinutes = daily.total ?? amount.minutes;
+    }
     if (!sessionOnly && (action.estimatedMinutes !== null || action.remainingMinutes !== null) && !hasEffort(action.sourceQuote)) return clarify("Do those days describe the date range, or full days of work? Please give an estimate in hours or minutes.");
     if (action.sessions.some((session) => !validInstant(session.start) || !validInstant(session.end) || Date.parse(session.end) <= Date.parse(session.start))) return clarify("Please specify a valid start and end time for the work session.");
     const correctedSessionSource = output.actions.length === 1 && correctedDateSource && /\b(?:sorry|meant|correction|actually|instead)\b/i.test(correctedDateSource) ? correctedDateSource : null;
@@ -272,7 +318,7 @@ export function compileInterpretation(raw: unknown, text: string, state: Context
     }
     if (unknownTotal && !action.sessions.length && clocks.length)
       return clarify("I understand that the total project effort is unknown, but you also requested a work session. Please confirm that session's date and times; I won't save it without the booking.");
-    if ((sessionOnly || existingSessionOnly || dateSelection) && action.sessions.some(session => !clocks.some(range => range.start === localClockMinutes(session.start, state.settings.timeZone) && range.end === localClockMinutes(session.end, state.settings.timeZone))))
+    if ((sessionOnly || existingSessionOnly || dateSelection || wantsFit) && action.sessions.some(session => !clocks.some(range => range.start === localClockMinutes(session.start, state.settings.timeZone) && range.end === localClockMinutes(session.end, state.settings.timeZone))))
       return clarify("The project total can stay unknown. What start and end times should I reserve for this session? For example, 9am–11am.");
     if (action.sessions.some(session => localClockMinutes(session.start, state.settings.timeZone) < clockMinutes(state.settings.lunchEnd) && localClockMinutes(session.end, state.settings.timeZone) > clockMinutes(state.settings.lunchStart)))
       return clarify(`That session crosses your ${state.settings.lunchStart}–${state.settings.lunchEnd} lunch break. Should I split the work around lunch and extend the finish, or keep the finish time and book fewer working hours? The project total can remain unknown.`);
@@ -314,7 +360,17 @@ export function compileInterpretation(raw: unknown, text: string, state: Context
         ...(daily.plan ? { dailyPlan: daily.plan, allowedDates: daily.plan.map(day => day.date) } : {}),
         references: action.references.filter((url) => /^https?:\/\//i.test(url) && text.includes(url)), createdAt: now.toISOString(), updatedAt: now.toISOString(),
       };
-      commands.push({ type: "create", item, ...(action.sessions.length ? { sessions: makeSessions(action, id) } : {}), urgent, ...flags });
+      // Bounded, ordinary new work uses the same clean-fit path as the manual
+      // form. Explicit clock sessions and legacy replanning requests retain
+      // their existing validation path.
+      if (!smartFit && !waiting && !action.sessions.length && windowEnd && !urgent && !flags.overrideProtected && !flags.overrideDeadline
+        && !daily.plan?.some(day => !state.settings.weekdays.includes(dayOfWeek(day.date)))) {
+        const amount = daily.plan ? { minutes: daily.plan[0].minutes } : statedFitMinutes(createEvidence);
+        if (amount.minutes !== undefined && (daily.plan || amount.minutes === item.remainingMinutes))
+          smartFit = { startDate: windowStart, endDate: windowEnd, minutes: amount.minutes, distribution: daily.plan ? "per_day" : "total" };
+      }
+      commands.push(smartFit ? { type: "create", item, smartFit }
+        : { type: "create", item, ...(action.sessions.length ? { sessions: makeSessions(action, id) } : {}), urgent, ...flags });
     } else if (action.type === "update" && item) {
       const patch: Partial<WorkItem> = {};
       for (const key of ["title", "description", "category", "webKind", "estimatedMinutes", "remainingMinutes", "windowStart", "windowEnd", "targetDate", "deadline", "minimumSessionMinutes", "progressTotal", "updateDate"] as const) {
@@ -366,6 +422,9 @@ export function compileInterpretation(raw: unknown, text: string, state: Context
       commands.push({ type: "block", block: { id: randomUUID(), title: action.title, kind: action.blockKind, start: action.sessions[0].start, end: action.sessions[0].end }, ...flags });
     }
   }
+  if (commands.some(command => command.type === "fit" || command.type === "create" && command.smartFit)
+    && commands.some(command => command.type !== "fit" && !(command.type === "create" && command.smartFit)))
+    return clarify("I can find open time without moving existing bookings. Please submit other edits separately from this find-time request.");
   return { kind: "commands", message: output.message || `Prepared ${commands.length} change${commands.length === 1 ? "" : "s"} for the scheduler.`, commands };
 }
 
@@ -375,7 +434,7 @@ export function emptyAssistantAction(type: AssistantAction["type"], sourceQuote:
     progressTotal: null, progressCompleted: null, updateDate: null, status: null, reason: null, references: [], sessions: [], blockKind: null, removeBlock: false };
 }
 
-const ONGOING_PROJECT_RULES = `Selected-date rules: selectedDates is an explicit user choice for this instruction, including follow-up replies. Its inclusive start/end are the default windowStart/windowEnd for a new project; do not ask the user to repeat them in prose. A work_window normally means fit the stated total effort WITHIN the range. EXCEPTION: an explicit daily amount (‘two hours each selected day’, ‘2 hours of work for each day’, ‘one hour daily’) means that amount on EVERY chosen day, not one total. ‘Spread ten hours evenly over these five days’ means two hours per day. ‘Ten hours sometime within these dates’ remains flexible total placement. Keep the exact daily instruction in sourceQuote; the compiler derives and enforces date-by-date budgets. Derive the total for new known-effort work, but preserve unknown project totals as null. Never invent a clock time; leave sessions empty when only daily amounts are given. Clarify conflicting totals or uneven splits that cannot use 15-minute increments. Each selected day includes weekends unless the user explicitly says weekdays/workdays; the scheduler reports closed days instead of silently skipping them. Keep sessions empty unless clock times are explicitly supplied. A selected project_span is owner-only display context: with no separately specified session, save waiting work with no bookings even if an estimate is known. Keep unknown totals null. Selected dates never imply effort, a deadline, target, priority, completion, protected-time override, or permission to edit existing work. Spoken dates that conflict with the choice require clarification and zero actions. The exact reply Use the selected dates explicitly replaces earlier conflicting work dates; preserve all other user facts. For project_span, separately stated session dates still need grounding in the words and must lie inside the timeline. Changing or clearing selectedDates replaces prior selection context. For existing work, explicit daily amounts in a selected work window authorize replacing its daily allocation via schedule without clock times; retain its project estimate. Otherwise ask for clock times, or use the manual editor for timeline changes. Ongoing-project clarification rules: 'Add it', 'book this', and 'add that' can continue the pending project; do not call them new tasks solely because they start with a command verb. Keep the client and title from the original instruction. A corrected date replaces the earlier date; do not keep asking about the old weekday/date mismatch once corrected. Project spans may cover consecutive named months (including September, October, November and December), or this month until the end of the year. Interpret these as windowStart/windowEnd only, never as a deadline or booked workdays. Use the latest explicit span correction while retaining other project facts. For an OWNER who explicitly says the total/remaining project effort is unknown but supplies specific work-session dates and clock ranges, create planned work with estimatedMinutes and remainingMinutes NULL and only those sessions. This session-only case is NOT waiting work: it overrides the earlier unknown-effort backlog example. A four-hour first session is not a four-hour project estimate. Do not ask for the total again once it is explicitly unknown. Explicit daily amounts plus dates also authorize booking owner unknown-total projects without inventing clock times. With neither dated daily amounts nor clock sessions, unknown-effort work may stay waiting without booking time. Do not invent session times from an unknown total. To book more sessions on an existing unknown-total project, preserve its null effort and emit only the new sessions. The compiler preserves existing bookings unless the user explicitly says to replace the sessions. Do not include old session dates or times not supplied in the instruction. Requesters still need a positive project estimate. Never count lunch as work or silently extend the requested end. If a requested interval crosses lunch, ask whether to split around lunch and extend the finish, or book fewer working hours. An explicit reply 'split around lunch and extend the finish' authorizes retaining the working duration by splitting at the configured lunch boundaries. Example: a four-hour 9am–1pm request with lunch 12–12:30 becomes 9am–12pm and 12:30pm–1:30pm ONLY after that explicit reply. sourceQuote must include all relevant user turns, never ADA's question. Do not infer completion from a project span, booked hours, or time passing.`;
+const ONGOING_PROJECT_RULES = `Selected-date rules: selectedDates is an explicit user choice for this instruction, including follow-up replies. Its inclusive start/end are the default windowStart/windowEnd for a new project; do not ask the user to repeat them in prose. A work_window normally means fit the stated total effort WITHIN the range. EXCEPTION: an explicit daily amount (‘two hours each selected day’, ‘2 hours of work for each day’, ‘one hour daily’) means that amount on EVERY chosen day, not one total. ‘Spread ten hours evenly over these five days’ means two hours per day. ‘Ten hours sometime within these dates’ remains flexible total placement. Keep the exact daily instruction in sourceQuote; the compiler derives and enforces date-by-date budgets. Derive the total for new known-effort work, but preserve unknown project totals as null. Never invent a clock time; leave sessions empty when only daily amounts are given. Clarify conflicting totals or uneven splits that cannot use 15-minute increments. Each selected day includes weekends unless the user explicitly says weekdays/workdays; the scheduler reports closed days instead of silently skipping them. Keep sessions empty unless clock times are explicitly supplied. A selected project_span is owner-only display context: with no separately specified session, save waiting work with no bookings even if an estimate is known. Keep unknown totals null. Selected dates never imply effort, a deadline, target, priority, completion, protected-time override, or permission to edit existing work. Spoken dates that conflict with the choice require clarification and zero actions. The exact reply Use the selected dates explicitly replaces earlier conflicting work dates; preserve all other user facts. For project_span, separately stated session dates still need grounding in the words and must lie inside the timeline. Changing or clearing selectedDates replaces prior selection context. For existing work, requests to add/book hours, find a time, or fit additional work use type fit, not update or schedule; see the smart-fit rules below. A request to replace a daily allocation still uses schedule and retains the project estimate. Use the manual editor for timeline changes. Ongoing-project clarification rules: 'Add it', 'book this', and 'add that' can continue the pending project; do not call them new tasks solely because they start with a command verb. Keep the client and title from the original instruction. A corrected date replaces the earlier date; do not keep asking about the old weekday/date mismatch once corrected. Project spans may cover consecutive named months (including September, October, November and December), or this month until the end of the year. Interpret these as windowStart/windowEnd only, never as a deadline or booked workdays. Use the latest explicit span correction while retaining other project facts. For an OWNER who explicitly says the total/remaining project effort is unknown but supplies specific work-session dates and clock ranges, create planned work with estimatedMinutes and remainingMinutes NULL and only those sessions. This session-only case is NOT waiting work: it overrides the earlier unknown-effort backlog example. A four-hour first session is not a four-hour project estimate. Do not ask for the total again once it is explicitly unknown. Explicit daily amounts plus dates also authorize booking owner unknown-total projects without inventing clock times. Dated find-time requests can also book a stated duration while keeping the project total unknown. Without a booking request, unknown-effort work may stay waiting without booking time. Do not invent session times from an unknown total. To book more sessions on an existing unknown-total project, preserve its null effort and emit only the new sessions. The compiler preserves existing bookings unless the user explicitly says to replace the sessions. Do not include old session dates or times not supplied in the instruction. Requesters still need a positive project estimate. Never count lunch as work or silently extend the requested end. If a requested interval crosses lunch, ask whether to split around lunch and extend the finish, or book fewer working hours. An explicit reply 'split around lunch and extend the finish' authorizes retaining the working duration by splitting at the configured lunch boundaries. Example: a four-hour 9am–1pm request with lunch 12–12:30 becomes 9am–12pm and 12:30pm–1:30pm ONLY after that explicit reply. sourceQuote must include all relevant user turns, never ADA's question. Do not infer completion from a project span, booked hours, or time passing. Smart-fit rules: 'Find time for 2 hours today for Oil Survey system', 'Book another two hours tomorrow', and 'Add two hours for this existing project on the selected days' request collision-free ADDITIONAL reservations, not changed estimates or replacement sessions. For existing work emit exactly one type fit action with the exact itemReference, booking amount in estimatedMinutes, windowStart/windowEnd for the requested day or inclusive range, and sessions empty. The compiler grounds the booking amount in sourceQuote; remainingMinutes stays null/unspecified. Do not emit separate status, update, or schedule actions for that same booking. A direct request to book/find time on a waiting project authorizes resuming it when the booking succeeds; if the user says keep waiting, clarify before booking. The server preserves the project total, display span, allowed dates, minimum focus session, all existing bookings and protected time. Do not promise a fit until the scheduler checks. Only Bryan may fit hours into existing work. For new work still use create; when asked to find time, keep sessions empty and supply the stated work day/range and stated booking duration. An owner may say the total project effort is unknown and ask to find two hours today: create a planned unknown-total project with only those booked hours, not a two-hour project estimate. No clock times are needed for either case. Today and tomorrow use the current local date; a single stated day is both endpoints. Selected work-window dates supply missing endpoints, not invented clock times. Never turn a display-only month span into the booking range. If the scheduler asks for another day, 'try tomorrow' or 'Friday instead' continues the same project and hours with the corrected booking dates, without repeating old dates in the proposed window. Distinguish total hours across a range from hours each day. Daily smart fitting uses configured workdays; clarify a request that explicitly requires closed days rather than silently skipping them. Explicit clock times still use existing exact-session actions. A request to replace or move existing sessions is not an append-only fit request.`;
 
 /** Intentionally small, deterministic demonstration parser; never used as live AI fallback. */
 export function interpretDemoInput(text: string, state: Context, actor: Actor, now = new Date(), authorityText = text, clarificationReplies: string[] = [], dateSelection?: AssistantDateSelection | null): Interpretation {
@@ -389,11 +448,29 @@ export function interpretDemoInput(text: string, state: Context, actor: Actor, n
   if (clauses.length > 1 && dateReply) return finish(clarify("For this limited demo parser, start a new instruction with each task's corrected dates included."));
   const actions: AssistantAction[] = [];
   for (const clause of clauses) {
-    if (/\b(?:maybe|might|could we|what if|thinking about|not sure|don't|do not)\b/i.test(clause)) return finish(clarify("Please state the change directly when you are ready to make it."));
-    const clients = state.clients.filter((client) => [client.name, ...client.aliases].some((name) => mention(clause, name)));
+    if (/\b(?:maybe|might|could we|what if|thinking about|not sure|don't|do not)\b/i.test(clause) && !asksToFindTime(clause, true)) return finish(clarify("Please state the change directly when you are ready to make it."));
+    let clients = state.clients.filter((client) => [client.name, ...client.aliases].some((name) => mention(clause, name)));
+    const namedItems = state.items.filter(item => mention(clause, item.title) || mention(clause, item.id));
+    if (!clients.length && namedItems.length === 1 && asksToFindTime(clause, true)) clients = state.clients.filter(client => client.id === namedItems[0].clientId);
     if (clients.length !== 1) return finish(clarify("Use one exact client name per change. Separate a batch with semicolons."));
     const client = clients[0];
     const matching = state.items.filter((item) => item.clientId === client.id && (mention(clause, item.title) || (item.status !== "completed" && item.status !== "cancelled")));
+    const newWork = separateWorkRequested(clause) || /\bcreate\b|\b(?:new|separate)\s+(?:task|project|work|website)\b/i.test(clause);
+    if (asksToFindTime(clause, true) && !newWork && (namedItems.length > 0 || !/\b(?:web|it|software|landings?)\s+(?:work|task|project)\b/i.test(clause))) {
+      const exact = matching.filter(item => mention(clause, item.title) || mention(clause, item.id));
+      const item = exact.length === 1 ? exact[0] : matching.length === 1 ? matching[0] : null;
+      if (!item) return finish(clarify("Which existing project should I find time for? Use its title, or say create new work."));
+      const source = dateReply ?? clause;
+      const dates = source.match(/\b\d{4}-\d{2}-\d{2}\b/g) ?? [];
+      const today = localDate(now, state.settings.timeZone);
+      const single = /\btomorrow\b/i.test(source) ? addDays(today, 1) : /\btoday\b/i.test(source) ? today : null;
+      if (!dates.length && !single && !dateSelection && /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week)\b/i.test(source))
+        return finish(clarify("For this limited demo parser, select the dates or use YYYY-MM-DD, today, or tomorrow."));
+      actions.push({ ...emptyAssistantAction("fit", clause), clientName: [client.name, ...client.aliases].some(name => mention(clause, name)) ? client.name : null, itemReference: item.title,
+        estimatedMinutes: statedFitMinutes(clause).minutes ?? null, windowStart: dateSelection?.start ?? dates[0] ?? single,
+        windowEnd: dateSelection?.end ?? dates.at(-1) ?? single });
+      continue;
+    }
     if (/\b(?:complete|completed|done|finish|finished)\b/i.test(clause) && !/\b(?:by|until)\b/i.test(clause)) {
       const exact = matching.filter((item) => mention(clause, item.title));
       const item = exact.length === 1 ? exact[0] : matching.length === 1 ? matching[0] : null;

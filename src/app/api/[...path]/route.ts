@@ -225,12 +225,15 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
       else {
         try {
           interpretation = await interpretInput(input.text, state, actor, { demo: demoEnabled(), now, continuation, dateSelection });
-          if (interpretation.kind === "commands" && interpretation.commands.some(command =>
-            command.type === "create" ? Boolean(command.item.dailyPlan?.length) : command.type === "update" && Boolean(command.patch.dailyPlan?.length))) {
+          const findingTime = interpretation.commands.some(command => command.type === "fit" || command.type === "create" && Boolean(command.smartFit));
+          if (interpretation.kind === "commands" && (findingTime || interpretation.commands.some(command =>
+            command.type === "create" ? Boolean(command.item.dailyPlan?.length) : command.type === "update" && Boolean(command.patch.dailyPlan?.length)))) {
             const commands = z.array(commandSchema).min(1).max(30).parse(interpretation.commands) as WorkCommand[];
             const checked = planCommands(state, commands, actor, { now: now.toISOString(), operationId: input.operationId });
+            const fitConflict = findingTime && checked.status !== "ready" ? checked.conflicts[0] : undefined;
             const dailyConflict = checked.conflicts.find(conflict => ["daily_capacity", "daily_hours", "daily_hours_total"].includes(conflict.code));
-            if (dailyConflict) interpretation = { ...interpretation, kind: "clarification", commands: [], message: dailyConflict.message };
+            const conflict = fitConflict ?? dailyConflict;
+            if (conflict) interpretation = { ...interpretation, kind: "clarification", commands: [], message: conflict.message };
           }
           await store.finishAI(actor, input.operationId, { interpretation, continuation: nextContinuation(input.text, interpretation, now, continuation, dateSelection) }, demoEnabled() ? undefined : interpretation.usage?.costUsd);
         } catch (error) {
