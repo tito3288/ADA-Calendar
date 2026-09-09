@@ -814,23 +814,20 @@ small {
   padding: var(--day-padding-y) var(--day-padding-x);
   text-align: left;
 }
-/* Dim each past column, including its portion of multi-day ribbons.
-   The visual veil never intercepts clicks or changes calendar state. */
-.day-cell.is-past::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  background: var(--bg);
-  opacity: 0.65;
-  pointer-events: none;
+/* Fade past-day information without dimming task names or project ribbons. */
+.day-cell.is-past > .day-header,
+.day-cell.is-past > .capacity-line {
+  opacity: 0.35;
 }
-.day-cell.is-past:hover::after {
-  opacity: 0.45;
+.day-cell.is-past:hover > .day-header,
+.day-cell.is-past:hover > .capacity-line {
+  opacity: 0.55;
 }
-.day-cell.is-past:focus-visible::after,
-.day-cell.is-past.date-selected::after {
-  opacity: 0.15;
+.day-cell.is-past:focus-visible > .day-header,
+.day-cell.is-past:focus-visible > .capacity-line,
+.day-cell.is-past.date-selected > .day-header,
+.day-cell.is-past.date-selected > .capacity-line {
+  opacity: 0.85;
 }
 .day-header {
   display: flex;
