@@ -9,13 +9,15 @@ import { planCommands, validateSchedule } from "../scheduler";
 import { buildCommitNotifications, buildDraftNotifications, buildRequestNotifications } from "./email";
 import { attachmentPath, canAccessAttachmentWork, validateUpload } from "./uploads";
 import { assertReviewedProposal } from "./preview";
+import type { PersonalNote } from "../notes";
 
 export type AIOperationInput = { id: string; kind: "assistant" | "transcribe"; inputHash: string; reserveUsd: number; parentId?: string };
 export type AIOperationResult = { status: "claimed" | "processing" | "completed" | "failed"; result: unknown | null };
 export type PrivateAIOperation = { kind: string; status: "processing" | "completed" | "failed"; result: unknown };
 type Reservation = { actorId: string; amountUsd: number; settled: boolean };
 type StoredAIOperation = PrivateAIOperation & { actorId: string; workspaceId: string; inputHash: string; parentId?: string };
-type StoredState = AppState & { aiReservations?: Record<string, Reservation>; aiMonth?: string; aiOperations?: Record<string, StoredAIOperation>; operationHashes?: Record<string, string>; pendingAttachmentIds?: string[] };
+type StoredState = AppState & { aiReservations?: Record<string, Reservation>; aiMonth?: string; aiOperations?: Record<string, StoredAIOperation>; operationHashes?: Record<string, string>; pendingAttachmentIds?: string[];
+  personalNotes?: { workspaceId: string; authorId: string; note: PersonalNote }[] };
 const globalStore = globalThis as unknown as { adaWriteQueue?: Promise<unknown> };
 export function demoEnabled() { return process.env.NODE_ENV !== "production" && process.env.ADA_DEMO_MODE === "true"; }
 export function demoDirectory() { return process.env.ADA_DATA_DIR || path.join(process.cwd(), ".data"); }
@@ -59,11 +61,16 @@ function trustedActor(state: StoredState, actor: Actor) {
   if (!trusted || trusted.role !== actor.role || trusted.email !== actor.email || trusted.name !== actor.name) throw new Error("The actor does not match workspace membership.");
   return trusted;
 }
+export function assertDemoNotesOwner(state: StoredState, actor: Actor) {
+  const trusted = trustedActor(state, actor);
+  if (trusted.role !== "owner") throw new Error("Only the workspace owner can access personal notes.");
+  return trusted;
+}
 const commandHash = (commands: ScheduleProposal["commands"]) => createHash("sha256").update(JSON.stringify(commands)).digest("hex");
 function visible(state: StoredState, actor: Actor): AppState {
   trustedActor(state, actor);
-  const { aiReservations: _reservations, aiMonth: _month, aiOperations: _operations, operationHashes: _hashes, pendingAttachmentIds: _pending, ...publicState } = state;
-  void _reservations; void _month; void _operations; void _hashes;
+  const { aiReservations: _reservations, aiMonth: _month, aiOperations: _operations, operationHashes: _hashes, pendingAttachmentIds: _pending, personalNotes: _notes, ...publicState } = state;
+  void _reservations; void _month; void _operations; void _hashes; void _notes;
   return { ...publicState, actor,
     requests: state.requests.filter(r => actor.role === "owner" || r.requesterId === actor.id),
     notifications: state.notifications.filter(n => actor.role === "owner" || n.recipient === actor.email),

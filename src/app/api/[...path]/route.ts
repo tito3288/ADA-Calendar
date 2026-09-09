@@ -20,6 +20,8 @@ import { verifyEmailWebhook, deliveryStatusForEvent } from "@/lib/server/email";
 import { attachmentPath, validateUpload, authorizeAttachmentAccess } from "@/lib/server/uploads";
 import { PreviewChangedError, withReviewFingerprint } from "@/lib/server/preview";
 import type { Attachment, EmailDraft, Interpretation, WorkCommand } from "@/lib/types";
+import { noteSaveSchema } from "@/lib/notes";
+import { listNotes, saveNote, NoteAccessError, NoteConflictError } from "@/lib/server/notes";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -65,6 +67,10 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
     const segments = (await ctx.params).path;
     if (segments.join("/") === "auth/callback") return handleAuthCallback(req);
     const actor = await currentActor();
+    if (segments.join("/") === "notes") {
+      if (actor.role !== "owner") return failure(new Error("Notes are private to the owner’s account."), 403);
+      return NextResponse.json({ notes: await listNotes(actor) }, { headers: { "Cache-Control": "private, no-store" } });
+    }
     const state = await store.getState(actor.id);
     if (segments[0] === "state") return NextResponse.json(state, { headers: { "Cache-Control": "no-store" } });
     if (segments[0] === "attachments" && segments[1]) {
@@ -85,7 +91,7 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
       } });
     }
     return failure(new Error("Not found."), 404);
-  } catch (error) { return failure(error, 401); }
+  } catch (error) { return failure(error, error instanceof NoteAccessError ? 403 : 401); }
 }
 
 export async function POST(req: NextRequest, ctx: RouteContext) {
@@ -121,6 +127,11 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
       return authResponse({ ok: true });
     }
     const actor = await currentActor();
+    if (route === "notes") {
+      if (actor.role !== "owner") return failure(new Error("Notes are private to the owner’s account."), 403);
+      const input = noteSaveSchema.parse(await json(req));
+      return NextResponse.json({ note: await saveNote(actor, input) }, { headers: { "Cache-Control": "private, no-store" } });
+    }
     let state = await store.getState(actor.id);
     if (actor.role === "viewer") return failure(new Error("Viewers have read-only access."), 403);
     if (route === "commands") {
@@ -297,6 +308,8 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
     }
     return failure(new Error("Not found."), 404);
   } catch (error) {
+    if (error instanceof NoteConflictError) return failure(error, 409);
+    if (error instanceof NoteAccessError) return failure(error, 403);
     if (error instanceof PreviewChangedError) return NextResponse.json({ error: error.message, proposal: error.proposal }, { status: 409 });
     return failure(error);
   }

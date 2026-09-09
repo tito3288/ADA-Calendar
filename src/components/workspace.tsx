@@ -21,6 +21,7 @@ import {
   Plus,
   Search,
   Settings2,
+  StickyNote,
   Sparkles,
   Undo2,
   X,
@@ -58,8 +59,9 @@ import {
 import { SettingsPanel } from "./settings-panel";
 import { RequestReview, RequestAttachments } from "./request-review";
 import { BrandLogo } from "./brand-logo";
+import { NotesPanel } from "./notes-panel";
 
-type Section = "calendar" | "work" | "requests" | "updates";
+type Section = "calendar" | "work" | "requests" | "updates" | "notes";
 function DraftCard({
   draft,
   onState,
@@ -152,6 +154,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
   const [date, setDate] = useState(today);
   const [view, setView] = useState<CalendarView>("month");
   const [section, setSection] = useState<Section>("calendar");
+  const [notesVisited, setNotesVisited] = useState(false);
   const [categories, setCategories] = useState<Category[]>([
     "web",
     "it",
@@ -380,6 +383,9 @@ export function Workspace({ initialState }: { initialState: AppState }) {
     { id: "work" as const, icon: Layers3, label: "All work" },
     { id: "requests" as const, icon: Inbox, label: "Requests" },
     { id: "updates" as const, icon: Activity, label: "Activity & email" },
+    ...(owner
+      ? [{ id: "notes" as const, icon: StickyNote, label: "Notes" }]
+      : []),
   ];
   return (
     <div className="app-shell">
@@ -406,6 +412,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
               key={n.id}
               className={`nav-item ${section === n.id ? "selected" : ""}`}
               onClick={() => {
+                if (n.id === "notes") setNotesVisited(true);
                 setSection(n.id);
                 setMobileNav(false);
               }}
@@ -557,7 +564,9 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                   ? "Everything on the plate."
                   : section === "requests"
                     ? "Make room, thoughtfully."
-                    : "Everyone in the loop."}
+                    : section === "notes"
+                      ? "A place for your notes."
+                      : "Everyone in the loop."}
             </h1>
             <p className="muted">
               {section === "calendar"
@@ -566,11 +575,13 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                   ? "Projects, batches, and the work that happens in between."
                   : section === "requests"
                     ? "Clean-fit work books directly. Changing commitments needs Bryan’s say."
-                    : "Committed changes, client updates, and the emails that keep everyone informed."}
+                    : section === "notes"
+                      ? "Lists, ideas, and details to come back to. Each note stays separate."
+                      : "Committed changes, client updates, and the emails that keep everyone informed."}
             </p>
           </div>
           <div className="heading-actions">
-            {state.actor.role !== "viewer" && (
+            {state.actor.role !== "viewer" && section !== "notes" && (
               <>
                 <button
                   className="secondary"
@@ -612,74 +623,89 @@ export function Workspace({ initialState }: { initialState: AppState }) {
             )}
           </div>
         </div>
-        {owner && state.aiUsageUsd >= state.settings.aiWarningUsd && (
-          <div className="budget-note" role="status">
-            <Sparkles size={16} />
-            <span>
-              AI allowance: ${state.aiUsageUsd.toFixed(2)} of $
-              {state.settings.aiLimitUsd.toFixed(2)} this month (including
-              reserved calls).{" "}
-              {state.aiUsageUsd >= state.settings.aiLimitUsd
-                ? "New AI calls are paused."
-                : "Approaching your pause threshold."}{" "}
-              Manual scheduling remains available.
-            </span>
-            <button className="text-button" onClick={() => setSettings(true)}>
-              Manage allowance
+        {owner &&
+          section !== "notes" &&
+          state.aiUsageUsd >= state.settings.aiWarningUsd && (
+            <div className="budget-note" role="status">
+              <Sparkles size={16} />
+              <span>
+                AI allowance: ${state.aiUsageUsd.toFixed(2)} of $
+                {state.settings.aiLimitUsd.toFixed(2)} this month (including
+                reserved calls).{" "}
+                {state.aiUsageUsd >= state.settings.aiLimitUsd
+                  ? "New AI calls are paused."
+                  : "Approaching your pause threshold."}{" "}
+                Manual scheduling remains available.
+              </span>
+              <button className="text-button" onClick={() => setSettings(true)}>
+                Manage allowance
+              </button>
+            </div>
+          )}
+        {section !== "notes" && (
+          <div className="summary-strip">
+            <div>
+              <span className="summary-icon">
+                <Layers3 size={17} />
+              </span>
+              <span>
+                <strong>{active.length}</strong>active projects
+              </span>
+            </div>
+            <div>
+              <span className="summary-icon">
+                <Clock3 size={17} />
+              </span>
+              <span>
+                <strong>
+                  {formatHours(weekPlanned)}
+                  <small> / {formatHours(weekCapacity)}</small>
+                </strong>
+                planned this week
+              </span>
+              <div className="tiny-capacity">
+                <i
+                  style={{
+                    width: `${Math.min(100, (weekPlanned / (weekCapacity || 1)) * 100)}%`,
+                  }}
+                />
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                setSection("work");
+                setSearch("");
+              }}
+            >
+              <span className="summary-icon">
+                <ArrowDownLeft size={17} />
+              </span>
+              <span>
+                <strong>{waiting.length}</strong>waiting on input
+              </span>
+            </button>
+            <button onClick={() => setSection("requests")}>
+              <span className="summary-icon">
+                <Inbox size={17} />
+              </span>
+              <span>
+                <strong>{pending.length}</strong>pending requests
+              </span>
             </button>
           </div>
         )}
-        <div className="summary-strip">
-          <div>
-            <span className="summary-icon">
-              <Layers3 size={17} />
-            </span>
-            <span>
-              <strong>{active.length}</strong>active projects
-            </span>
+        {owner && notesVisited && (
+          <div hidden={section !== "notes"}>
+            <NotesPanel
+              key={`${state.workspaceId}:${state.actor.id}:${state.actor.role}`}
+              actorId={state.actor.id}
+            />
           </div>
-          <div>
-            <span className="summary-icon">
-              <Clock3 size={17} />
-            </span>
-            <span>
-              <strong>
-                {formatHours(weekPlanned)}
-                <small> / {formatHours(weekCapacity)}</small>
-              </strong>
-              planned this week
-            </span>
-            <div className="tiny-capacity">
-              <i
-                style={{
-                  width: `${Math.min(100, (weekPlanned / (weekCapacity || 1)) * 100)}%`,
-                }}
-              />
-            </div>
-          </div>
-          <button
-            onClick={() => {
-              setSection("work");
-              setSearch("");
-            }}
-          >
-            <span className="summary-icon">
-              <ArrowDownLeft size={17} />
-            </span>
-            <span>
-              <strong>{waiting.length}</strong>waiting on input
-            </span>
-          </button>
-          <button onClick={() => setSection("requests")}>
-            <span className="summary-icon">
-              <Inbox size={17} />
-            </span>
-            <span>
-              <strong>{pending.length}</strong>pending requests
-            </span>
-          </button>
-        </div>
-        <div className="content-columns">
+        )}
+        <div
+          className="content-columns"
+          style={section === "notes" ? { display: "none" } : undefined}
+        >
           <div className="primary-column">
             {(section === "calendar" || section === "work") && (
               <div className="calendar-toolbar">
