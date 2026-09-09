@@ -82,7 +82,10 @@ test("single-day keyboard selection, reverse ranges, reset, and ordinary day nav
   await expect(page.locator(".date-selection-toolbar strong")).toHaveText("Sep 9, 2026 – Sep 11, 2026");
   await day(page, "Monday, September 14").click();
   await expect(page.locator(".date-selection-toolbar strong")).toHaveText("Sep 14, 2026");
-  await page.getByRole("button", { name: "Clear selection", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Clear selection", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Cancel selection", exact: true }).click();
+  await expect(page.locator(".date-selection-toolbar")).toHaveCount(0);
+  await page.getByRole("button", { name: "Select dates", exact: true }).click();
   await expect(page.getByRole("button", { name: "Ask ADA about these dates", exact: true })).toBeDisabled();
   await page.getByRole("button", { name: "Cancel selection", exact: true }).click();
   await day(page, "Wednesday, September 9").locator(".day-number").click();

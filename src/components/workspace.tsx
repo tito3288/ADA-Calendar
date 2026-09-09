@@ -835,15 +835,6 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                       <button
                         className="secondary"
                         onClick={() => {
-                          setDateSelection(null);
-                          setSelectionAnchor(null);
-                        }}
-                      >
-                        Clear selection
-                      </button>
-                      <button
-                        className="secondary"
-                        onClick={() => {
                           setSelectingDates(false);
                           setDateSelection(null);
                           setSelectionAnchor(null);
