@@ -27,6 +27,7 @@ import { localDate, localDateTime, minutesBetween } from "@/lib/time";
 import { formatHours } from "@/lib/work";
 import { api, dateLabel, Field, timeLabel } from "./ui";
 import { SessionManager } from "./session-manager";
+import { DayCompletion } from "./day-completion";
 
 function SessionEditor({
   session,
@@ -195,9 +196,13 @@ export function WorkDetails({
   const [preview, setPreview] = useState<string | null>(null);
   const [checklistTitle, setChecklistTitle] = useState("");
   const [override, setOverride] = useState(false);
+  const [completionDate, setCompletionDate] = useState<string | null>(null);
   const sessions = state.sessions
     .filter((s) => s.workItemId === item.id && s.status === "planned")
     .sort((a, b) => a.start.localeCompare(b.start));
+  const visibleSessions = state.sessions.filter(session => session.workItemId === item.id && session.status !== "cancelled")
+    .sort((a, b) => a.start.localeCompare(b.start));
+  const sessionDays = [...new Set(visibleSessions.map(session => localDate(session.start, state.settings.timeZone)))];
   const attachments = state.attachments.filter(
     (a) => a.workItemId === item.id && !a.removedAt,
   );
@@ -214,6 +219,7 @@ export function WorkDetails({
     : remainingMinutes !== undefined || item.remainingMinutes !== null);
   function manage(mode: "smart" | "exact", nextRemaining?: number, resized?: WorkSession) {
     setEditing(null);
+    setCompletionDate(null);
     setSessionMode(mode);
     setSessionRemaining(nextRemaining);
     setSessionDrafts(resized ? sessions.map(session => session.id === resized.id ? resized : session) : undefined);
@@ -384,17 +390,29 @@ export function WorkDetails({
       <section className="detail-section">
         <h3>
           <Clock3 size={16} />
-          Work sessions <span>{sessions.length}</span>
+          Work sessions <span>{visibleSessions.length}</span>
         </h3>
         {managingSessions ? (
           <SessionManager key={`${sessionMode}-${sessionRemaining}`} item={item} state={state} initialMode={sessionMode} initialSessions={sessionDrafts} initialRemainingMinutes={sessionRemaining} initialProgressCompleted={sessionRemaining === undefined ? undefined : completed} onSaved={onState} onClose={() => setManagingSessions(false)} />
-        ) : sessions.length ? (
-          sessions.map((s) => (
+        ) : sessionDays.length ? (
+          sessionDays.map(day => {
+            const daySessions = visibleSessions.filter(session => localDate(session.start, state.settings.timeZone) === day);
+            const plannedMinutes = daySessions.filter(session => session.status === "planned").reduce((sum, session) => sum + minutesBetween(session.start, session.end), 0);
+            const completedMinutes = daySessions.filter(session => session.status === "completed").reduce((sum, session) => sum + minutesBetween(session.start, session.end), 0);
+            const label = dateLabel(day, { weekday: "short", month: "short", day: "numeric" });
+            return <section key={day} className={`completion-day${plannedMinutes ? "" : " completion-day-done"}`} aria-label={`Work on ${label}`} data-work-date={day}>
+              <div className="completion-day-heading">
+                <div><h4>{label}</h4><p>{plannedMinutes > 0 && <span>{formatHours(plannedMinutes)} booked</span>}{completedMinutes > 0 && <span className="completion-done"><Check size={13} />{formatHours(completedMinutes)} done</span>}</p></div>
+                {owner && plannedMinutes > 0 && item.status !== "completed" && item.status !== "cancelled" && <button className="secondary completion-finish" disabled={busy} onClick={() => { setEditing(null); setCompletionDate(completionDate === day ? null : day); }}><CheckCircle2 size={15} />Finish this day</button>}
+                {!plannedMinutes && <span className="completion-done"><CheckCircle2 size={16} />Day finished</span>}
+              </div>
+              {daySessions.map(s => s.status === "completed" ? <div className="completion-session-done" key={s.id} data-session-id={s.id}><Check size={14} /><span>{timeLabel(s.start, state.settings.timeZone)}–{timeLabel(s.end, state.settings.timeZone)}</span><span>Done</span></div> : (
             <div key={s.id}>
               <button
                 className="session-row"
                 disabled={!owner}
-                onClick={() => setEditing(editing === s.id ? null : s.id)}
+                onClick={() => { setCompletionDate(null); setEditing(editing === s.id ? null : s.id); }}
+                aria-label={`Edit booking on ${label}, ${timeLabel(s.start, state.settings.timeZone)}–${timeLabel(s.end, state.settings.timeZone)}`}
               >
                 <span>
                   {s.protected ? (
@@ -402,11 +420,7 @@ export function WorkDetails({
                   ) : (
                     <span className="category-dot" />
                   )}
-                  {dateLabel(localDate(s.start, state.settings.timeZone), {
-                    weekday: "short",
-                    month: "short",
-                    day: "numeric",
-                  })}
+                  {formatHours(minutesBetween(s.start, s.end))}
                 </span>
                 <strong>
                   {timeLabel(s.start, state.settings.timeZone)}–
@@ -456,13 +470,15 @@ export function WorkDetails({
                     </button>
                   </div>
                   <p className="micro muted">
-                    Completing a session is not completing this project. Report
-                    remaining effort below.
+                    This individual session control keeps reported effort unchanged. Use Finish this day to finish all of this day’s booked hours and update remaining effort together.
                   </p>
                 </>
               )}
             </div>
-          ))
+              ))}
+              {completionDate === day && <DayCompletion key={`${item.id}-${day}-${state.version}`} item={item} date={day} state={state} onSaved={onState} onClose={() => setCompletionDate(null)} />}
+            </section>;
+          })
         ) : (
           <p className="muted">
             No hours booked. Add hours when you are ready to work on this project.

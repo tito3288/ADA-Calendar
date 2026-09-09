@@ -64,6 +64,8 @@ export type WorkCommand =
   | { type: "move"; sessionId: string; start: string; end: string; overrideProtected?: boolean; overrideDeadline?: boolean }
   | { type: "progress"; itemId: string; remainingMinutes?: number; progressCompleted?: number; checklist?: ChecklistItem[] }
   | { type: "complete_session"; sessionId: string; remainingMinutes?: number }
+  /** Record all still-planned hours for one work item/day as completed. */
+  | { type: "complete_day"; itemId: string; date: string }
   | { type: "status"; itemId: string; status: WorkStatus; reason?: string; remainingMinutes?: number; overrideProtected?: boolean }
   | { type: "client_update"; itemId: string; message: string }
   | { type: "block"; block: UnavailableBlock; remove?: boolean; overrideProtected?: boolean; overrideDeadline?: boolean };
@@ -83,6 +85,8 @@ export interface WorkEvent {
   before: { items: WorkItem[]; sessions: WorkSession[]; blocks: UnavailableBlock[] };
   after: { items: WorkItem[]; sessions: WorkSession[]; blocks: UnavailableBlock[] };
   undoneBy: string | null;
+  /** Derived from the saved command; never inferred from an event's prose. */
+  completedDay?: { itemId: string; date: string };
 }
 export interface PendingRequest {
   id: string; requesterId: string; requesterName: string; proposal: ScheduleProposal;

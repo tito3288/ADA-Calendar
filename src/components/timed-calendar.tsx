@@ -7,7 +7,8 @@ import "@fullcalendar/react/skeleton.css";
 import "@fullcalendar/react/themes/classic/theme.css";
 import "@fullcalendar/react/themes/classic/palette.css";
 import type { AppState, WorkCommand, WorkItem } from "@/lib/types";
-import { addDays, dayOfWeek, localDate, localDateTime, addMinutes } from "@/lib/time";
+import { addDays, dayOfWeek, localDate, localDateTime, addMinutes, minutesBetween } from "@/lib/time";
+import { formatHours } from "@/lib/work";
 import { dateLabel, timeLabel } from "./ui";
 
 const colors = {
@@ -87,7 +88,7 @@ export default function TimedCalendar({
         weekends={false}
         nowIndicator
         editable={state.actor.role === "owner"}
-        eventOverlap={false}
+        eventOverlap={(stillEvent) => stillEvent.extendedProps.sessionStatus === "completed"}
         events={[
           ...backgrounds,
           ...state.blocks.map((b) => ({
@@ -107,27 +108,39 @@ export default function TimedCalendar({
           ...state.sessions
             .filter(
               (s) =>
-                s.status === "planned" &&
+                s.status !== "cancelled" &&
                 items.some((i) => i.id === s.workItemId),
             )
             .map((s) => {
               const item = items.find((i) => i.id === s.workItemId)!;
+              const completed = s.status === "completed";
               return {
                 id: s.id,
-                title: `${s.protected ? "🔒 " : ""}${state.clients.find((c) => c.id === item.clientId)?.name} · ${item.title}`,
+                title: `${completed ? `✓ ${formatHours(minutesBetween(s.start, s.end))} done · ` : s.protected ? "🔒 " : ""}${state.clients.find((c) => c.id === item.clientId)?.name} · ${item.title}`,
                 start: s.start,
                 end: s.end,
-                color: colors[item.category],
-                contrastColor: "#e9edeb",
-                editable: state.actor.role === "owner" && !s.protected,
-                extendedProps: { workItemId: item.id },
+                color: completed ? "#28302d" : colors[item.category],
+                contrastColor: completed ? "#b4c0b8" : "#e9edeb",
+                editable: !completed && state.actor.role === "owner" && !s.protected,
+                ...(completed ? { startEditable: false, durationEditable: false, className: "completed-time-session" } : {}),
+                extendedProps: { workItemId: item.id, sessionStatus: s.status },
               };
             }),
         ]}
         eventDidMount={(info) => {
           const blockId = info.event.extendedProps.blockId as string | undefined;
           const block = state.blocks.find((b) => b.id === blockId);
-          if (!block) return;
+          if (!block) {
+            const session = state.sessions.find(session => session.id === info.event.id);
+            if (session) {
+              info.el.dataset.sessionId = session.id;
+              info.el.dataset.sessionStatus = session.status;
+              const label = `${info.event.title}, ${dateLabel(localDate(session.start, state.settings.timeZone))} ${timeLabel(session.start, state.settings.timeZone)}–${timeLabel(session.end, state.settings.timeZone)}`;
+              info.el.setAttribute("aria-label", label);
+              info.el.title = label;
+            }
+            return;
+          }
           const startDate = localDate(block.start, state.settings.timeZone);
           const endDate = localDate(block.end, state.settings.timeZone);
           const label = `${block.kind === "meeting" ? "Meeting" : "Time off"}: ${block.title}, ${dateLabel(startDate)} ${timeLabel(block.start, state.settings.timeZone)}–${startDate === endDate ? "" : `${dateLabel(endDate)} `}${timeLabel(block.end, state.settings.timeZone)} · Fixed unavailable time`;
@@ -148,7 +161,7 @@ export default function TimedCalendar({
           const start = info.event.startStr;
           const end = info.event.endStr;
           info.revert();
-          if (start && end && !info.event.extendedProps.blockId && state.sessions.some((s) => s.id === info.event.id))
+          if (start && end && !info.event.extendedProps.blockId && state.sessions.some((s) => s.id === info.event.id && s.status === "planned"))
             void onCommand({
               type: "move",
               sessionId: info.event.id,
@@ -161,7 +174,7 @@ export default function TimedCalendar({
           const end = info.event.endStr;
           const original = state.sessions.find((s) => s.id === info.event.id);
           info.revert();
-          if (start && end && original && !info.event.extendedProps.blockId)
+          if (start && end && original?.status === "planned" && !info.event.extendedProps.blockId)
             void onCommand({
               type: "schedule",
               itemId: original.workItemId,
@@ -178,7 +191,7 @@ export default function TimedCalendar({
       <p className="micro muted">
         Meetings and time off are fixed; work is scheduled around them. Open a calendar event for details.
         {state.settings.reserveMinutes > 0 && " Amber shading is your interruption reserve."}
-        {" "}Protected sessions cannot be dragged.
+        {" "}Completed hours stay visible as done. Completed and protected sessions cannot be dragged.
       </p>
     </div>
   );

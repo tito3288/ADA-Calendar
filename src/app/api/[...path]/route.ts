@@ -138,7 +138,7 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
     if (route === "commands") {
       const input = commandRequestSchema.parse(await json(req));
       const proposal = withReviewFingerprint(planCommands(state, input.commands, actor, { operationId: input.operationId, approveDisplacement: actor.role === "owner" }));
-      if (input.action === "preview") return NextResponse.json({ proposal });
+      if (input.action === "preview") return NextResponse.json({ proposal, ...(input.commands.some(command => command.type === "complete_day") ? { state } : {}) });
       const prior = state.events.find(event => event.operationId === input.operationId);
       if (input.baseVersion !== undefined && input.baseVersion !== state.version && !prior) return NextResponse.json({ error: "The schedule changed. Review this updated preview.", state, proposal }, { status: 409 });
       const priorRequest = input.action === "request" && state.requests.some(request => request.id === input.operationId);

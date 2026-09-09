@@ -18,8 +18,14 @@ Owners can open a task → **Edit hours** to edit one row per booked day, includ
 
 Completed/cancelled work stays read-only. The clock alone never claims a planned session was actually started. Past days may be reduced or removed, but new placement requires future available working time. Protected changes need an explicit override, and real date constraints/deadlines still apply. Every manual change is reviewed and confirmed atomically. Exact latest-event Undo may restore an existing planned booking's original elapsed time without recording completion.
 
+## Finish a booked day
+
+Use **Finish this day → Confirm day finished** beside the date in task details. For three one-hour days, finishing day one leaves a muted **✓ 1h done** on that date, keeps the next two one-hour bookings active, and changes remaining effort from three hours to two. The original estimate stays three hours. Unknown-total ongoing projects stay unknown.
+
+Finishing a day never completes the entire project or books replacement time. **Mark project complete** is the separate action for closing the whole job. Completed dates remain visible in the calendar and details without reserving time.
+
 ## Deployment
 
-Daily validation was introduced in `202609080001_daily_hours.sql`. The later `202609090003_simple_day_hours.sql` separates display dates from explicit restrictions and removes focus requirements. `202609090004_move_unfinished_bookings.sql` makes planned sources editable after their scheduled time and preserves recorded completion/cancellation. Apply database compatibility before application changes; no task, booking or saved-setting backfill is needed for the unfinished-booking fix.
+Daily validation was introduced in `202609080001_daily_hours.sql`. The later `202609090003_simple_day_hours.sql` separates display dates from explicit restrictions and removes focus requirements. `202609090004_move_unfinished_bookings.sql` makes planned sources editable after their scheduled time and preserves recorded completion/cancellation. The later `202609090005_complete_booked_day.sql` adds scoped day-completion validation, and `202609090006_undo_booked_day_completion.sql` permits exact latest-event Undo of that completion's own status and effort changes while preserving older history. Apply database compatibility before application changes; these migrations do not rewrite work or saved settings.
 
 See [VERIFICATION.md](VERIFICATION.md) for test and release evidence. Development uses isolated fixtures and captured mail.

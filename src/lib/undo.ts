@@ -1,5 +1,13 @@
-import { isInstant } from "./time";
+import { isInstant, localDate } from "./time";
+import { commandSchema } from "./schemas";
 import type { ScheduleSnapshot, WorkEvent } from "./types";
+
+/** Publish only the narrow completion identity from authoritative saved commands. */
+export function completedDayFromCommands(commands: unknown): WorkEvent["completedDay"] {
+  if (!Array.isArray(commands) || commands.length !== 1) return undefined;
+  const result = commandSchema.safeParse(commands[0]);
+  return result.success && result.data.type === "complete_day" ? { itemId: result.data.itemId, date: result.data.date } : undefined;
+}
 
 // Event snapshots come from both JSON files and PostgreSQL JSONB. Property order
 // must not make an unchanged historical session appear to have been edited.
@@ -20,13 +28,24 @@ export function undoUnavailableReason(
   if (!state.events.some(candidate=>candidate.id===event.id) || event.undoneBy || event.version!==state.version)
     return "Only the latest unchanged schedule change can be undone. A newer change was saved or this change was already undone.";
   const before=new Map(event.before.sessions.map(session=>[session.id,session]));
+  const after=new Map(event.after.sessions.map(session=>[session.id,session]));
+  // Only this latest day-completion event may reverse its own recorded status.
+  // A changed current snapshot, unrelated history or changed source body is not
+  // an eligible completion rollback, even if an event's version was retained.
+  const completedDay = event.completedDay && canonical(state.items)===canonical(event.after.items)
+    && canonical(state.blocks)===canonical(event.after.blocks)
+    && state.sessions.length===event.after.sessions.length && event.before.sessions.length===event.after.sessions.length
+    && state.sessions.every(session=>canonical(session)===canonical(after.get(session.id))) ? event.completedDay : undefined;
   for (const session of state.sessions) {
     const restored=before.get(session.id);
     if (restored && canonical(restored)===canonical(session)) continue;
     if (!isInstant(session.start)) return "A changed work session has invalid dates. Refresh and review it before undoing.";
-    // Scheduled clock time is not evidence of actual work. Only recorded
-    // completion/cancellation makes a changed session immutable to Undo.
-    if (session.status!=="planned")
+    const reversesThisCompletion = completedDay && restored?.status==="planned" && session.status==="completed"
+      && session.workItemId===completedDay.itemId && localDate(session.start,state.settings.timeZone)===completedDay.date
+      && canonical({ ...restored,status:"completed" })===canonical(session);
+    // Historical work stays immutable except for reversing the exact status
+    // transition just recorded by this single, unchanged day completion.
+    if (session.status!=="planned" && !reversesThisCompletion)
       return "Undo would change completed or cancelled work. Use a new scheduling instruction instead.";
   }
   // The server and SQL require the latest event's exact before snapshot.

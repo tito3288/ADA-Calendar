@@ -72,6 +72,7 @@ export const commandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("move"), sessionId: idSchema, start: instantSchema, end: instantSchema, ...override }).strict(),
   z.object({ type: z.literal("progress"), itemId: idSchema, remainingMinutes: minutes.optional(), progressCompleted: minutes.optional(), checklist: checklistSchema.optional() }).strict(),
   z.object({ type: z.literal("complete_session"), sessionId: idSchema, remainingMinutes: minutes.optional() }).strict(),
+  z.object({ type: z.literal("complete_day"), itemId: idSchema, date: dateSchema }).strict(),
   z.object({ type: z.literal("status"), itemId: idSchema, status: statusSchema, reason: z.string().max(2000).optional(), remainingMinutes: minutes.optional(), overrideProtected: z.boolean().optional() }).strict(),
   z.object({ type: z.literal("client_update"), itemId: idSchema, message: z.string().min(1).max(10_000) }).strict(),
   z.object({ type: z.literal("block"), block: blockSchema, remove: z.boolean().optional(), ...override }).strict(),

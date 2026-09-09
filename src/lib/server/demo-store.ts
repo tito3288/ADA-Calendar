@@ -10,7 +10,7 @@ import { buildCommitNotifications, buildDraftNotifications, buildRequestNotifica
 import { attachmentPath, canAccessAttachmentWork, validateUpload } from "./uploads";
 import { assertReviewedProposal } from "./preview";
 import type { PersonalNote } from "../notes";
-import { undoUnavailableReason } from "../undo";
+import { completedDayFromCommands, undoUnavailableReason } from "../undo";
 
 export type AIOperationInput = { id: string; kind: "assistant" | "transcribe"; inputHash: string; reserveUsd: number; parentId?: string };
 export type AIOperationResult = { status: "claimed" | "processing" | "completed" | "failed"; result: unknown | null };
@@ -102,6 +102,7 @@ function saveProposal(state: StoredState, actor: Actor, proposal: SchedulePropos
     summary: proposal.summary, itemIds: proposal.affectedItemIds, createdAt: new Date().toISOString(), version: state.version + 1,
     before: structuredClone({ items: state.items, sessions: state.sessions, blocks: state.blocks }),
     after: structuredClone({ items: proposal.items, sessions: proposal.sessions, blocks: proposal.blocks }), undoneBy: null,
+    completedDay: completedDayFromCommands(proposal.commands),
   };
   state.items = proposal.items; state.sessions = proposal.sessions; state.blocks = proposal.blocks; state.version++;
   state.events.unshift(event);

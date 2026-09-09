@@ -1,13 +1,13 @@
 "use client";
 import { useEffect, useMemo, useRef, type CSSProperties } from "react";
 import dynamic from "next/dynamic";
-import { LockKeyhole, ArrowUpRight, GripVertical, CalendarClock, TreePalm } from "lucide-react";
+import { LockKeyhole, ArrowUpRight, GripVertical, CalendarClock, TreePalm, Check } from "lucide-react";
 import type { AppState, UnavailableBlock, WorkCommand, WorkItem } from "@/lib/types";
 import type { AssistantDateSelection } from "@/lib/assistant-date-selection";
 import { addDays, dayOfWeek, instantFromMs, instantMs, localDate, localDateTime, minutesBetween } from "@/lib/time";
 import { dayCapacity } from "@/lib/scheduler";
 import { formatHours } from "@/lib/work";
-import { workTimeline } from "@/lib/work-timeline";
+import { workDaySummary, workTimeline } from "@/lib/work-timeline";
 import { dateLabel, Empty, timeLabel } from "./ui";
 import { calendarBookingMoveSourceUnavailableReason, type CalendarBookingMoveSelection } from "@/lib/calendar-booking-move";
 import { useCalendarBookingDrag } from "./use-calendar-booking-drag";
@@ -103,7 +103,7 @@ export function MonthCalendar({
         const visibleDates = (item: WorkItem) => {
           const timeline = workTimeline(item, state.sessions, state.settings.timeZone);
           const sessionDays = state.sessions
-            .filter((s) => s.workItemId === item.id && s.status === "planned")
+            .filter((s) => s.workItemId === item.id && s.status !== "cancelled")
             .map((s) => localDate(s.start, state.settings.timeZone));
           return days.filter(
             (d) =>
@@ -244,14 +244,16 @@ export function MonthCalendar({
                 );
                 const label = `${client?.name} · ${item.title}`;
                 const segments = days.slice(from, to + 1).map(d => {
-                  const sessions = state.sessions.filter(s => s.workItemId === item.id && s.status === "planned" && localDate(s.start, state.settings.timeZone) === d);
+                  const { plannedSessions: sessions, plannedMinutes: minutes, completedMinutes } = workDaySummary(item.id, state.sessions, d, state.settings.timeZone);
                   const sessionIds = sessions.map(s => s.id);
-                  const minutes = sessions.reduce((sum, s) => sum + minutesBetween(s.start, s.end), 0);
                   const reason = minutes ? calendarBookingMoveSourceUnavailableReason(state, sessionIds, new Date().toISOString()) : null;
-                  return { d, sessions, sessionIds, minutes, reason, draggable: canMove && minutes > 0 && !reason };
+                  return { d, sessions, sessionIds, minutes, completedMinutes, reason, draggable: canMove && minutes > 0 && !reason };
                 });
+                const mixedDay = segments.some(segment => segment.minutes > 0 && segment.completedMinutes > 0);
+                const hasCompleted = segments.some(segment => segment.completedMinutes > 0);
+                const onlyCompleted = hasCompleted && !segments.some(segment => segment.minutes > 0);
                 return (
-                  <div key={item.id} className={`project-ribbon-lane category-${item.category}`} data-work-item-id={item.id} style={{ gridColumn: `${from + 1} / ${to + 2}`, gridRow: lane + 1 }}>
+                  <div key={item.id} className={`project-ribbon-lane category-${item.category} ${hasCompleted ? "completed-ribbon-lane" : ""} ${mixedDay ? "completed-mixed-lane" : ""} ${onlyCompleted ? "completed-ribbon-muted" : ""}`} data-work-item-id={item.id} style={{ gridColumn: `${from + 1} / ${to + 2}`, gridRow: lane + 1 }}>
                   <button
                     disabled={selectingDates || !!move.source && !move.isDragging}
                     title={label}
@@ -264,7 +266,7 @@ export function MonthCalendar({
                         gridTemplateColumns: `repeat(${to - from + 1}, 1fr)`,
                       }}
                     >
-                      {segments.map(({ d, sessions, sessionIds, minutes, draggable }) => {
+                      {segments.map(({ d, sessions, sessionIds, minutes, completedMinutes, draggable }) => {
                         return (
                           <span
                             key={d}
@@ -275,20 +277,27 @@ export function MonthCalendar({
                             onDragEnd={move.endDrag}
                             className={
                               minutes
-                                ? `ribbon-reserved ${draggable ? "booking-draggable" : ""}`
-                                : (() => { const timeline = workTimeline(item, state.sessions, state.settings.timeZone); return timeline && d >= timeline.start && (!timeline.end || d <= timeline.end); })()
+                                ? `ribbon-reserved ${draggable ? "booking-draggable" : ""} ${completedMinutes ? "completed-day-mixed" : ""}`
+                                : completedMinutes
+                                  ? "completed-day-base"
+                                  : (() => { const timeline = workTimeline(item, state.sessions, state.settings.timeZone); return timeline && d >= timeline.start && (!timeline.end || d <= timeline.end); })()
                                   ? "ribbon-span"
                                   : "ribbon-gap"
                             }
                           >
                             {minutes > 0 && (
-                              <span>
+                              <span className="planned-day-amount" aria-label={`${formatHours(minutes)} planned`}>
                                 {sessions.some((s) => s.protected) && (
                                   <LockKeyhole size={10} />
                                 )}
                                 {formatHours(minutes)}
                               </span>
                             )}
+                            {completedMinutes > 0 && <span className="completed-day-segment" data-completed-date={d} data-work-item-id={item.id}
+                              title={`${formatHours(completedMinutes)} done on ${dateLabel(d)}`} draggable={false}
+                              onDragStart={event => { event.preventDefault(); event.stopPropagation(); }}>
+                              <Check size={10} aria-hidden="true" />{formatHours(completedMinutes)} done
+                            </span>}
                           </span>
                         );
                       })}
@@ -336,7 +345,7 @@ export function Agenda({ state, date, items, onSelect, onSelectBlock }: Props) {
   const sessions = state.sessions
     .filter(
       (s) =>
-        s.status === "planned" &&
+        s.status !== "cancelled" &&
         localDate(s.start, state.settings.timeZone) >= date &&
         items.some((i) => i.id === s.workItemId),
     )
@@ -416,10 +425,13 @@ export function Agenda({ state, date, items, onSelect, onSelectBlock }: Props) {
               }
               const s = entry.session;
               const item = state.items.find((i) => i.id === s.workItemId)!;
+              const completed = s.status === "completed";
               return (
                 <button
-                  className="agenda-item"
+                  className={`agenda-item ${completed ? "completed-agenda-session" : ""}`}
                   key={s.id}
+                  data-session-id={s.id}
+                  data-session-status={s.status}
                   onClick={() => onSelect(item.id)}
                 >
                   <span className="agenda-time">
@@ -434,8 +446,8 @@ export function Agenda({ state, date, items, onSelect, onSelectBlock }: Props) {
                     </small>
                   </span>
                   <span className="agenda-end">
-                    {s.protected && <LockKeyhole size={14} />}
-                    {formatHours(minutesBetween(s.start, s.end))}
+                    {completed ? <Check size={14} aria-hidden="true" /> : s.protected && <LockKeyhole size={14} />}
+                    {formatHours(minutesBetween(s.start, s.end))}{completed ? " done" : ""}
                     <ArrowUpRight size={16} />
                   </span>
                 </button>

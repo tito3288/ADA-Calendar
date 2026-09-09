@@ -90,7 +90,9 @@ function reserveBlock(snapshot: ScheduleSnapshot, date: string, now: string): In
   const nowMs = instantMs(now);
   const usableStart = Math.max(reserve.start, nowMs);
   if (usableStart >= reserve.end) return null;
-  const consumed = snapshot.sessions.filter((session) => session.status !== "cancelled" && session.usesReserve && isInstant(session.start) && isInstant(session.end) && (planned(session) || instantMs(session.end) <= nowMs) && localDate(session.start, snapshot.settings.timeZone) === date)
+  // Explicit completion reports work done even when its scheduled end remains
+  // in the future. Preserve the reserve it already released for other bookings.
+  const consumed = snapshot.sessions.filter((session) => session.status !== "cancelled" && session.usesReserve && isInstant(session.start) && isInstant(session.end) && localDate(session.start, snapshot.settings.timeZone) === date)
     .reduce((sum, session) => sum + minutesBetween(session.start, session.end), 0);
   const released = Math.min(snapshot.settings.reserveMinutes, consumed, duration({ start: usableStart, end: reserve.end }));
   const start = usableStart + released * MINUTE;
@@ -549,6 +551,54 @@ function bookingSessionId(workspaceId: string, operationId: string, index: numbe
   return `booking-${hashes.join("")}-${index}`;
 }
 
+/** Record one day's actual completion without running the effort planner. */
+function planDayCompletion(snapshot: ScheduleSnapshot, commands: WorkCommand[], now: string, result: ScheduleProposal): ScheduleProposal {
+  const fail = (errors: ScheduleConflict[]): ScheduleProposal => ({ ...result, status: "infeasible", conflicts: errors });
+  if (commands.length !== 1) return fail([conflict("completion_mixed_commands", "Finish one booked day separately from other changes.")]);
+  const parsed = commandSchema.safeParse(commands[0]);
+  if (!parsed.success || parsed.data.type !== "complete_day") return fail([conflict("invalid_completion", "Choose an existing project and a valid day to finish.")]);
+  const command = parsed.data, draft = clone(snapshot), item = draft.items.find(candidate => candidate.id === command.itemId);
+  if (!item) return fail([conflict("unknown_work", "This project no longer exists. No work was marked complete.", [command.itemId])]);
+  if (item.status === "completed" || item.status === "cancelled") return fail([conflict("inactive_work", "Reopen this project before finishing another booked day.", [item.id])]);
+  try {
+    const selected = draft.sessions.filter(session => session.workItemId === item.id && planned(session) && localDate(session.start, draft.settings.timeZone) === command.date);
+    if (!selected.length) return { ...result, summary: ["This day has no planned hours left to finish. Nothing changed."] };
+    if (selected.some(session => !isInstant(session.start) || !isInstant(session.end) || minutesBetween(session.start, session.end) <= 0))
+      return fail([conflict("invalid_session", "A booking on this day has invalid times. No work was marked complete.", [item.id])]);
+    const recordedMinutes = selected.reduce((sum, session) => sum + minutesBetween(session.start, session.end), 0);
+    // Legacy elapsed bookings can end between whole minutes. Stored estimates
+    // use whole minutes; round the day's sum once, never each separate session.
+    const completedMinutes = Math.round(recordedMinutes);
+    const beforeRemaining = item.remainingMinutes;
+    latchTimeline(item, snapshot.sessions);
+    for (const session of selected) session.status = "completed";
+    if (item.remainingMinutes !== null) item.remainingMinutes = Math.max(0, item.remainingMinutes - completedMinutes);
+    let releasedUnbookedQuota = false;
+    if (item.dailyPlan !== undefined) item.dailyPlan = item.dailyPlan.flatMap(day => {
+      if (day.date !== command.date) return [day];
+      const minutes = Math.max(0, day.minutes - completedMinutes);
+      // Keep any leftover estimate, but do not retain an invalid dated quota
+      // left by a legacy booking ending between scheduling increments.
+      if (minutes % 15 !== 0) { releasedUnbookedQuota = true; return []; }
+      return minutes ? [{ ...day, minutes }] : [];
+    });
+    const errors = validateSchedule(draft, now);
+    if (errors.length) return fail(errors);
+    item.updatedAt = now;
+    refreshForecasts(draft, now, new Set([item.id]));
+    const stillBooked = draft.sessions.filter(session => session.workItemId === item.id).reduce((sum, session) => sum + bookedMinutes(session), 0);
+    if (item.remainingMinutes !== null && stillBooked < Math.ceil(item.remainingMinutes / draft.settings.slotMinutes) * draft.settings.slotMinutes) item.forecastDate = null;
+    return { ...result, items: draft.items, sessions: draft.sessions, affectedItemIds: [item.id], summary: [
+      `Finish ${Number((recordedMinutes / 60).toFixed(2))}h for ${item.title} on ${command.date}.`,
+      item.remainingMinutes === null ? "The ongoing project total stays unknown." : `Remaining work: ${Number((beforeRemaining! / 60).toFixed(2))}h → ${Number((item.remainingMinutes / 60).toFixed(2))}h.`,
+      ...(releasedUnbookedQuota ? ["The leftover estimate stays unbooked."] : []),
+      "Other booked days stay unchanged. Project status stays unchanged.",
+    ] };
+  } catch (error) {
+    return fail([conflict("invalid_completion", error instanceof Error ? error.message : "This booked day could not be completed.")]);
+  }
+}
+
 /** Set only the named days' booked totals. Other days, reservations, estimates
  * and completed work are not reconstructed by the general effort planner. */
 function planDayHours(snapshot: ScheduleSnapshot, command: Extract<WorkCommand, { type: "set_day_hours" }>, now: string, result: ScheduleProposal): ScheduleProposal {
@@ -815,6 +865,7 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
   if (actor.role !== "owner" && commands.some((command) => command.type !== "create")) return fail([conflict("forbidden", "Requesters can submit new work, but cannot edit existing work.")]);
   if (actor.role !== "owner" && commands.some((command) => ("overrideProtected" in command && command.overrideProtected) || ("overrideDeadline" in command && command.overrideDeadline))) return fail([conflict("forbidden", "Only Bryan can authorize protected-time or deadline overrides.")]);
   if (actor.role !== "owner" && commands.some(command => command.type === "create" && command.sessions?.some(session => session.focusOverrideMinutes !== undefined))) return fail([conflict("forbidden", "Only Bryan can authorize a booking-specific shorter focus session.")]);
+  if (commands.some(command => command.type === "complete_day")) return planDayCompletion(snapshot, commands, now, result);
   if (commands.some(command => command.type === "create" && command.bookingWindow && (command.smartFit || command.sessions !== undefined)))
     return fail([conflict("invalid_input", "Choose one initial booking method for each new task.")]);
   if (commands.some(isBookingEdit)) return planBookingEdit(snapshot, commands, now, result);
@@ -852,6 +903,7 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
     for (const command of commands) {
       // Day ordering is handled atomically above and cannot enter broad replanning.
       if (command.type === "reorder_day") return fail([conflict("reorder_mixed_commands", "Rearrange one day separately from other changes.")]);
+      if (command.type === "complete_day") return fail([conflict("completion_mixed_commands", "Finish one booked day separately from other changes.")]);
       if (isBookingEdit(command)) return fail([conflict("booking_mixed_commands", "Preview booking edits separately from other changes.")]);
       if (command.type === "create") {
         const item = clone(command.item);

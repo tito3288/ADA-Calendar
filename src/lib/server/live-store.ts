@@ -7,7 +7,7 @@ import { assertLiveActor, requireOwner } from "./auth";
 import { getSupabaseAdminClient, getSupabaseServerClient } from "./supabase";
 import { assertReviewedProposal } from "./preview";
 import type { AIOperationInput, AIOperationResult, PrivateAIOperation } from "./demo-store";
-import { undoUnavailableReason } from "../undo";
+import { completedDayFromCommands, undoUnavailableReason } from "../undo";
 
 function check(error: { message: string } | null, operation: string) {
   if (error) throw new Error(`${operation}: ${error.message}`);
@@ -28,7 +28,7 @@ export async function getLiveState(actorId: string): Promise<AppState> {
   const result = await Promise.all([
     db.rpc("read_schedule_snapshot"),
     db.from("workspace_members").select("user_id,name,email,role").eq("workspace_id", workspaceId).eq("active", true),
-    db.from("work_events").select("body").eq("workspace_id", workspaceId).order("created_at", { ascending: false }).limit(200),
+    db.from("work_events").select("body,operation_payload").eq("workspace_id", workspaceId).order("created_at", { ascending: false }).limit(200),
     db.from("pending_requests").select("body").eq("workspace_id", workspaceId).order("created_at", { ascending: false }).limit(200),
     db.from("notifications").select("*").eq("workspace_id", workspaceId).order("created_at", { ascending: false }).limit(300),
     db.from("attachments").select("*").eq("workspace_id", workspaceId).is("removed_at", null).eq("upload_status", "ready"),
@@ -41,7 +41,7 @@ export async function getLiveState(actorId: string): Promise<AppState> {
   return {
     ...snapshot,
     actor, members: result[1].data!.map((row) => ({ id: row.user_id, name: row.name, email: row.email, role: row.role })),
-    events: result[2].data!.map((row) => row.body), requests: result[3].data!.map((row) => row.body),
+    events: result[2].data!.map((row) => ({ ...row.body, completedDay: completedDayFromCommands(row.operation_payload) })), requests: result[3].data!.map((row) => row.body),
     notifications: result[4].data!.map((n) => ({ id: n.id, eventId: n.event_id, recipient: n.recipient, recipientName: n.recipient_name, subject: n.subject, body: n.body, status: n.status, attempts: n.attempts, providerId: n.provider_id, createdAt: n.created_at, lastError: n.last_error })),
     attachments: result[5].data!.map((a) => ({ id: a.id, workItemId: a.work_item_id, name: a.name, contentType: a.content_type, size: Number(a.size), path: a.path, uploadedBy: a.uploaded_by, createdAt: a.created_at, removedAt: a.removed_at })),
     emailDrafts: result[6].data!.map((d) => ({ id: d.id, authorId: d.author_id, itemId: d.item_id, subject: d.subject, body: d.body, status: d.status, createdAt: d.created_at })),

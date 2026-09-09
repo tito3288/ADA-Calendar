@@ -2157,6 +2157,63 @@ small {
 .session-manager-row-actions .check { margin: 0 auto 0 0; }
 .session-manager-row-actions .text-button { display: inline-flex; align-items: center; gap: 5px; }
 .session-manager-history input:disabled { opacity: .65; }
+
+/* Completed calendar hours remain visible without reserving or moving time. */
+.completed-day-base {
+  position: relative;
+  height: 26px;
+  border-left: 1px solid #7e9485;
+  background: color-mix(in srgb, var(--category-faint) 58%, transparent);
+}
+.completed-day-base > .completed-day-segment,
+.ribbon-reserved.completed-day-mixed > .completed-day-segment {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  right: 3px;
+  bottom: 1px;
+  padding: 0;
+  color: #adbbb2;
+  background: transparent;
+  font-size: 8px;
+  line-height: 10px;
+  white-space: nowrap;
+  z-index: 2;
+}
+.completed-ribbon-muted .ribbon-title { color: #adbbb2; }
+.completed-ribbon-lane .ribbon-title {
+  position: absolute;
+  top: 1px;
+  left: 0;
+  right: 0;
+  font-size: 9px;
+  line-height: 12px;
+}
+.completed-mixed-lane,
+.completed-mixed-lane .project-ribbon,
+.completed-mixed-lane .ribbon-reserved,
+.completed-mixed-lane .completed-day-base { height: 40px; }
+.completed-mixed-lane .ribbon-reserved > .planned-day-amount { bottom: 15px; }
+.completed-day-mixed { background: linear-gradient(to bottom, var(--category-bg) 0 26px, #202925 26px 40px); }
+.completed-agenda-session {
+  color: #adbbb2;
+  background: #19211d;
+}
+.completed-agenda-session .category-dot { opacity: .45; }
+.completed-agenda-session .agenda-end { color: #adbbb2; white-space: nowrap; }
+.timed-calendar .completed-time-session {
+  opacity: .72;
+  filter: saturate(.4);
+  cursor: pointer;
+}
+@media (max-width: 600px) {
+  .completed-day-base > .completed-day-segment,
+  .ribbon-reserved.completed-day-mixed > .completed-day-segment { font-size: 6px; gap: 1px; right: 2px; }
+  .completed-day-segment svg { width: 7px; }
+  .completed-ribbon-lane .ribbon-title { font-size: 7px; }
+}
 .session-manager-override { margin-top: 16px; font-size: 11px; }
 .session-manager .form-actions { flex-wrap: wrap; }
 .session-manager-effort { padding: 0 0 16px; border-bottom: 1px solid var(--border); }
@@ -3518,4 +3575,28 @@ small {
   .day-hours-row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .day-hours-row > button { justify-self: end; }
   .day-hours-row input { min-height: 44px; }
+}
+
+/* Explicit day completion review and recorded work history. */
+.completion-day { border: 1px solid var(--border); border-radius: 9px; margin: 14px 0; padding: 14px; }
+.completion-day-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.completion-day-heading h4 { margin: 0; font-size: 13px; }
+.completion-day-heading p { display: flex; flex-wrap: wrap; gap: 10px; margin: 5px 0 0; font-size: 12px; color: var(--muted); }
+.completion-finish { min-height: 40px; font-size: 12px; }
+.completion-done { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
+.completion-day-done { background: color-mix(in srgb, var(--muted) 4%, transparent); }
+.completion-session-done { display: flex; align-items: center; gap: 10px; padding: 12px 0; font-size: 12px; color: var(--muted); }
+.completion-session-done > span:last-child { margin-left: auto; }
+.completion-review { margin-top: 12px; border: 1px solid var(--mint); border-radius: 8px; padding: 16px; background: color-mix(in srgb, var(--mint) 5%, transparent); }
+.completion-review h4 { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 14px; }
+.completion-review p, .completion-review li { font-size: 12px; line-height: 1.6; }
+.completion-review ul { margin: 8px 0; padding-left: 20px; }
+.completion-effort { color: var(--mint); font-weight: 600; }
+.completion-review-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+@media (max-width: 520px) {
+  .completion-day { padding: 12px; }
+  .completion-day-heading { align-items: flex-start; }
+  .completion-finish { min-height: 44px; }
+  .completion-review { padding: 12px; }
+  .completion-review-actions > button { min-height: 44px; flex: 1 1 auto; }
 }
