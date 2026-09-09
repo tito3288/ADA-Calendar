@@ -30,8 +30,8 @@ for (const width of [1440, 390]) test(`independent private notes persist and reo
   await asActor(page.request, "bryan");
   const before = await state(page.request);
   expect(before.mode).toBe("demo");
-  const title = `Websites to Build from Scratch (${width}px fixture)`;
-  const secondTitle = `Ideas for next month (${width}px fixture)`;
+  const title = `Websites to Build from Scratch (${width}px fixture, run ${info.repeatEachIndex})`;
+  const secondTitle = `Ideas for next month (${width}px fixture, run ${info.repeatEachIndex})`;
   const body = "First client website\n\nSecond client website\nKeep this spacing.  ";
   await page.setViewportSize({ width, height: 1000 });
   await openNotes(page);
@@ -130,6 +130,6 @@ test("requesters and viewers cannot see personal notes or access their endpoint"
     await expect(page.getByRole("button", { name: "Notes", exact: true })).toHaveCount(0);
     expect((await page.request.get("/api/notes")).status()).toBe(403);
     expect((await post(page.request, "notes", { id: "not-authorized", title: "Denied", body: "", expectedVersion: 0 })).status()).toBe(403);
-    expect(JSON.stringify(await state(page.request))).not.toContain("Websites to Build from Scratch (1440px fixture)");
+    expect(JSON.stringify(await state(page.request))).not.toContain("Websites to Build from Scratch (");
   }
 });

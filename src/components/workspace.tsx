@@ -695,7 +695,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
           </div>
         )}
         {owner && notesVisited && (
-          <div hidden={section !== "notes"}>
+          <div className="notes-section" hidden={section !== "notes"}>
             <NotesPanel
               key={`${state.workspaceId}:${state.actor.id}:${state.actor.role}`}
               actorId={state.actor.id}

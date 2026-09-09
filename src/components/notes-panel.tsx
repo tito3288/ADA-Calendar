@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import {
   Check,
   FileText,
@@ -105,16 +105,17 @@ function NotesContent() {
     return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
   }, [dirty, busy]);
 
-  function focusTitle() {
-    requestAnimationFrame(() => titleInput.current?.focus());
-  }
+  useLayoutEffect(() => {
+    // Focus as the note opens, before another field can receive typing.
+    // A deferred animation-frame callback can steal focus from the body.
+    titleInput.current?.focus();
+  }, [draft?.id]);
 
   function openDraft(next: NoteDraft) {
     setDraft(next);
     setSaveError("");
     setConflict(false);
     setSaved(false);
-    focusTitle();
   }
 
   async function changeNote(change: PendingChange) {
