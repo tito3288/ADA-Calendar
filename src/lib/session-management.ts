@@ -102,7 +102,7 @@ export function splitSessionDraft(
   });
 }
 
-/** A manual replacement never changes effort or treats elapsed bookings as completed. */
+/** Replacement reservations and an optional explicit effort edit are one atomic proposal. */
 export function sessionManagementCommands({
   item,
   original,
@@ -111,6 +111,7 @@ export function sessionManagementCommands({
   now,
   overrideProtected = false,
   resume = false,
+  remainingMinutes,
 }: {
   item: WorkItem;
   original: WorkSession[];
@@ -119,9 +120,12 @@ export function sessionManagementCommands({
   now: string;
   overrideProtected?: boolean;
   resume?: boolean;
+  remainingMinutes?: number;
 }): WorkCommand[] {
   if (["completed", "cancelled"].includes(item.status))
     throw new Error("Reopen this project before changing its sessions.");
+  if (remainingMinutes !== undefined && (!Number.isInteger(remainingMinutes) || remainingMinutes < 0 || remainingMinutes > 100_000))
+    throw new Error("Remaining effort must be a whole number of minutes from 0 to 100,000.");
   const planned = original.filter(
     (session) => session.workItemId === item.id && session.status === "planned",
   );
@@ -140,7 +144,11 @@ export function sessionManagementCommands({
     const old = planned.find((session) => session.id === row.id);
     if (old && JSON.stringify(sessionDraft(old, zone)) === JSON.stringify(row))
       return { ...old };
-    return draftSession(row, item.id, zone);
+    const session = draftSession(row, item.id, zone);
+    const duration = minutesBetween(session.start, session.end);
+    if (duration < item.minimumSessionMinutes)
+      session.focusOverrideMinutes = Math.min(session.focusOverrideMinutes ?? duration, duration);
+    return session;
   });
   if (new Set(sessions.map((session) => session.id)).size !== sessions.length)
     throw new Error("Each session must have its own row.");
@@ -171,23 +179,17 @@ export function sessionManagementCommands({
     (sum, session) => sum + minutesBetween(session.start, session.end),
     0,
   );
-  const originallyReserved = planned.filter(session => instantMs(session.start) >= instantMs(now))
-    .reduce((sum, session) => sum + minutesBetween(session.start, session.end), 0);
-  const remaining = item.remainingMinutes === null ? null : Math.ceil(item.remainingMinutes / 15) * 15;
+  const effort = remainingMinutes ?? item.remainingMinutes;
+  const remaining = effort === null ? null : Math.ceil(effort / 15) * 15;
   if (remaining !== null && total > remaining)
-    throw new Error("These sessions exceed the remaining effort. Update the estimate separately before booking more hours.");
-  if (
-    remaining !== null && originallyReserved >= remaining && total !== remaining
-  ) {
-    throw new Error(
-      `Reserve all ${Number((remaining / 60).toFixed(2))} remaining hours across future sessions. Removing a row does not reduce the estimate; redistribute its hours or update remaining effort separately.`,
-    );
-  }
+    throw new Error("These sessions exceed the remaining effort. Reduce the booked hours or update remaining effort before previewing.");
   if (item.status === "waiting" && future.length && !resume)
     throw new Error(
       "Confirm that this waiting project should resume when its sessions are booked.",
     );
   const commands: WorkCommand[] = [];
+  const patch: Partial<WorkItem> = {};
+  if (remainingMinutes !== undefined) patch.remainingMinutes = remainingMinutes;
   if (item.dailyPlan?.length) {
     const byDate = new Map<string, number>();
     for (const session of future) {
@@ -197,17 +199,12 @@ export function sessionManagementCommands({
         (byDate.get(date) ?? 0) + minutesBetween(session.start, session.end),
       );
     }
-    commands.push({
-      type: "update",
-      itemId: item.id,
-      patch: {
-        dailyPlan: [...byDate]
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([date, minutes]) => ({ date, minutes })),
-      },
-      overrideProtected,
-    });
+    patch.dailyPlan = [...byDate]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, minutes]) => ({ date, minutes }));
   }
+  if (Object.keys(patch).length)
+    commands.push({ type: "update", itemId: item.id, patch, overrideProtected });
   if (item.status === "waiting" && future.length)
     commands.push({ type: "status", itemId: item.id, status: "planned" });
   commands.push({

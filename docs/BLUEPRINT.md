@@ -46,6 +46,13 @@ Bryan wears four hats: Web (edits/builds), IT, Landings, and Software. Kyle, Wil
 - Typing and voice use the same grounded path: “Find time for 2 hours today for Oil Survey system” adds only that booking. The model supplies intent, not clock-slot authority. Failed fits retain private clarification context, so “Try tomorrow” can continue with the same project and hours. Explicit clock ranges still use exact-session validation.
 - Manual changes are previewed and confirmed. Clear authorized Ask ADA instructions retain the existing automatic-save behavior. Requesters may smart-fit new estimated work only; they cannot add hours to existing projects. Preview version/fingerprint checks, server revalidation, atomic persistence and idempotency apply unchanged. No new database fields or migration are required.
 
+## September 9: Editing booked hours and days
+
+- The owner can open **Edit hours and days** on existing work, change each session's hours, or remove days without redistributing the released hours. An exact replacement can leave some or all remaining effort unscheduled; it does not report completion or change an estimate by itself.
+- **Update remaining effort too** explicitly saves a revised effort amount together with the sessions and daily quotas. For example, five two-hour days can become two hours Monday and one hour Tuesday–Friday with six hours remaining. Known original estimates stay unchanged; unknown totals stay unknown unless the owner explicitly supplies an estimate.
+- Lowering progress below a saved daily plan opens this editor with the entered amount retained. Preview shows before/after bookings, removed time, and remaining effort; confirmation uses the existing authorized, version-aware atomic transaction. Cancellation saves nothing.
+- Started/history bookings remain read-only. Explicit short bookings retain the usual project focus minimum through booking-specific exceptions. A previously valid short remainder stays at its existing time; changing a protected remainder's focus exception requires an owner override. Saved working hours, lunch, reserve, allowed dates, deadlines, and requester restrictions remain authoritative. No new schema fields or migration are required.
+
 ## September 9: ADA workspace helper
 
 - A separate floating **ADA** button opens a keyboard-accessible corner chat on desktop and a screen-fitting panel on mobile. It remains available across workspace pages. The existing **Select dates → Ask ADA / Add work** creation flow is unchanged.

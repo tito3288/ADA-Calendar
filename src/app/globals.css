@@ -2145,6 +2145,14 @@ small {
 .session-manager-history input:disabled { opacity: .65; }
 .session-manager-override { margin-top: 16px; font-size: 11px; }
 .session-manager .form-actions { flex-wrap: wrap; }
+.session-manager-effort { padding: 0 0 16px; border-bottom: 1px solid var(--border); }
+.session-manager-effort > .check { margin-top: 0; }
+.session-manager-row input { min-height: 44px; }
+.session-change-review { margin-top: 24px; }
+.session-change-review h4 { font-size: 14px; }
+.session-change-row { display: grid; gap: 6px; padding: 12px 0; border-bottom: 1px solid var(--border); font-size: 11px; line-height: 1.6; }
+.session-change-row > span { color: var(--muted); }
+.session-change-row > strong { color: var(--mint); font-weight: 500; }
 @media (max-width: 560px) {
   .session-manager { padding: 12px; }
   .session-manager-row .form-grid.three { grid-template-columns: 1fr 1fr; }

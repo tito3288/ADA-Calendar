@@ -936,7 +936,15 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
     if (errors.length) return fail(errors);
     for (const id of explicitIds) {
       const original = snapshot.items.find(item => item.id === id), item = draft.items.find(item => item.id === id);
-      if (!original || !item || original.remainingMinutes === null || original.remainingMinutes !== item.remainingMinutes || original.estimatedMinutes !== item.estimatedMinutes) continue;
+      if (!original || !item) continue;
+      // An exact replacement states how much time to reserve, including fewer
+      // hours or no future sessions. An explicit effort edit in this same
+      // transaction does not authorize filling any unreserved remainder.
+      if (commands.some(command => command.type === "schedule" && command.itemId === id && command.sessions !== undefined)) {
+        preserveReservationIds.add(id);
+        continue;
+      }
+      if (original.remainingMinutes === null || original.remainingMinutes !== item.remainingMinutes || original.estimatedMinutes !== item.estimatedMinutes) continue;
       const originallyReserved = snapshot.sessions.filter(session => session.workItemId === id).reduce((sum, session) => sum + futureMinutes(session, now), 0);
       if (originallyReserved < Math.ceil(original.remainingMinutes / draft.settings.slotMinutes) * draft.settings.slotMinutes) preserveReservationIds.add(id);
     }
@@ -981,7 +989,7 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
       }
       if (preserveReservationIds.has(id)) {
         const reserved = draft.sessions.filter(session => session.workItemId === id).reduce((sum, session) => sum + futureMinutes(session, now), 0);
-        if (reserved > Math.ceil(item.remainingMinutes! / draft.settings.slotMinutes) * draft.settings.slotMinutes) errors.push(conflict("booking_effort", "These explicit bookings exceed remaining effort. Change the estimate separately before booking more time.", [id]));
+        if (item.remainingMinutes !== null && reserved > Math.ceil(item.remainingMinutes / draft.settings.slotMinutes) * draft.settings.slotMinutes) errors.push(conflict("booking_effort", "These explicit bookings exceed remaining effort. Reduce the booked hours or explicitly update remaining effort.", [id]));
         continue;
       }
       const trimming = trimExcess(draft, item, now, protectedOverride(id));
@@ -1070,9 +1078,8 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
       // Explicitly completing one daily booking releases it; it does not book
       // that same effort again or silently change the project estimate.
       if (completedDailyIds.has(item.id)) continue;
-      // A manual move or explicit replacement of intentionally partial bookings
-      // preserves that reservation decision; it is not a request to fill every
-      // remaining estimated hour. Full-booking/manual reshape rules stay intact.
+      // Manual replacements and moves of partial bookings preserve the owner's
+      // reservation decision without filling unreserved estimated effort.
       if (preserveReservationIds.has(item.id)) continue;
       settledIds.add(item.id);
       const incomingRequest = requester && !snapshot.items.some((existing) => existing.id === item.id);
@@ -1152,6 +1159,34 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
       break;
     }
     if (errors.length) return fail(errors, requester ? "approval_required" : "infeasible");
+    // Releasing an earlier reservation can invalidate an otherwise unchanged
+    // final short remainder. Keep its previously valid duration for that booking
+    // only; history and protected metadata still require their normal authority.
+    const remainderFocusIds = new Set(preserveReservationIds.size ? validateSchedule(draft, now)
+      .filter(error => error.code === "focus_length").flatMap(error => error.itemIds ?? []) : []);
+    if (remainderFocusIds.size && !validateSchedule(snapshot, now).length) {
+      for (const session of draft.sessions.filter(session => preserveReservationIds.has(session.workItemId)
+        && commands.some(command => command.type === "schedule" && command.itemId === session.workItemId && command.sessions !== undefined)
+        && planned(session) && instantMs(session.start) >= instantMs(now))) {
+        const original = snapshot.sessions.find(old => old.id === session.id);
+        const item = draft.items.find(item => item.id === session.workItemId)!;
+        const minutes = minutesBetween(session.start, session.end);
+        if (!remainderFocusIds.has(item.id) || !original || JSON.stringify(original) !== JSON.stringify(session) || minutes >= item.minimumSessionMinutes) continue;
+        const focusErrors = () => validateSchedule(draft, now).filter(error => error.code === "focus_length" && error.itemIds?.includes(item.id)).length;
+        const before = focusErrors(), previous = session.focusOverrideMinutes;
+        if (!before) continue;
+        session.focusOverrideMinutes = minutes;
+        const after = focusErrors();
+        if (after >= before) {
+          if (previous === undefined) delete session.focusOverrideMinutes; else session.focusOverrideMinutes = previous;
+          continue;
+        }
+        if (session.protected && !protectedOverride(item.id))
+          return fail([conflict("protected_session", "Keeping an existing protected short booking valid requires a booking-specific focus exception. Explicitly authorize changes to protected sessions before previewing; no sessions changed.", [item.id])]);
+        if (!after) remainderFocusIds.delete(item.id);
+        summaries.push(`Keep the existing ${minutes / 60}h short booking on ${localDate(session.start, draft.settings.timeZone)} at its current time, with its previously allowed shorter focus length for that booking only.`);
+      }
+    }
     const validation = validateSchedule(draft, now);
     // Explicitly supplied sessions may never create past work, even if other historical
     // sessions are retained as history in the same snapshot.

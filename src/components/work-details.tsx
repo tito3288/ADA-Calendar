@@ -31,10 +31,12 @@ function SessionEditor({
   session,
   state,
   command,
+  onResize,
 }: {
   session: WorkSession;
   state: AppState;
   command: (c: WorkCommand) => Promise<void>;
+  onResize: (session: WorkSession) => void;
 }) {
   const zone = state.settings.timeZone;
   const fmt = (iso: string) =>
@@ -75,8 +77,7 @@ function SessionEditor({
         </Field>
       </div>
       <p className="micro muted">
-        Resizing changes reserved time, not progress. Remaining work must still
-        fit; update remaining effort separately if your estimate changed.
+        Change the times to move this session. A shorter or longer duration opens the hours editor so you can review the schedule and remaining effort together.
       </p>
       {session.protected && (
         <label className="check">
@@ -94,33 +95,17 @@ function SessionEditor({
         onClick={() => {
           const nextStart = localDateTime(date, start, zone);
           const nextEnd = localDateTime(date, end, zone);
-          return command(
-            minutesBetween(nextStart, nextEnd) ===
-              minutesBetween(session.start, session.end)
-              ? {
-                  type: "move",
-                  sessionId: session.id,
-                  start: nextStart,
-                  end: nextEnd,
-                  overrideProtected: override,
-                }
-              : {
-                  type: "schedule",
-                  itemId: session.workItemId,
-                  sessions: state.sessions
-                    .filter(
-                      (s) =>
-                        s.workItemId === session.workItemId &&
-                        s.status === "planned",
-                    )
-                    .map((s) =>
-                      s.id === session.id
-                        ? { ...s, start: nextStart, end: nextEnd }
-                        : s,
-                    ),
-                  overrideProtected: override,
-                },
-          );
+          if (minutesBetween(nextStart, nextEnd) !== minutesBetween(session.start, session.end)) {
+            onResize({ ...session, start: nextStart, end: nextEnd });
+            return;
+          }
+          return command({
+            type: "move",
+            sessionId: session.id,
+            start: nextStart,
+            end: nextEnd,
+            overrideProtected: override,
+          });
         }}
       >
         Move session
@@ -204,6 +189,8 @@ export function WorkDetails({
   const [editing, setEditing] = useState<string | null>(null);
   const [managingSessions, setManagingSessions] = useState(false);
   const [sessionMode, setSessionMode] = useState<"smart" | "exact">("smart");
+  const [sessionRemaining, setSessionRemaining] = useState<number | undefined>();
+  const [sessionDrafts, setSessionDrafts] = useState<WorkSession[] | undefined>();
   const [preview, setPreview] = useState<string | null>(null);
   const [checklistTitle, setChecklistTitle] = useState("");
   const [override, setOverride] = useState(false);
@@ -224,6 +211,13 @@ export function WorkDetails({
   const canResume = validRemaining && (item.estimatedMinutes === null
     ? remainingMinutes !== undefined && remainingMinutes > 0
     : remainingMinutes !== undefined || item.remainingMinutes !== null);
+  function manage(mode: "smart" | "exact", nextRemaining?: number, resized?: WorkSession) {
+    setEditing(null);
+    setSessionMode(mode);
+    setSessionRemaining(nextRemaining);
+    setSessionDrafts(resized ? sessions.map(session => session.id === resized.id ? resized : session) : undefined);
+    setManagingSessions(true);
+  }
   async function command(c: WorkCommand) {
     setBusy(true);
     setError("");
@@ -361,6 +355,9 @@ export function WorkDetails({
             <Pencil size={14} />
             Edit work
           </button>
+          {item.status !== "completed" && item.status !== "cancelled" && <button className="secondary" onClick={() => manage("exact")}>
+            <Clock3 size={14} /> Edit hours and days
+          </button>}
           {item.status !== "completed" && item.status !== "cancelled" && (
             <button
               className="primary"
@@ -387,17 +384,17 @@ export function WorkDetails({
         </h3>
         {owner && item.status !== "completed" && item.status !== "cancelled" && !managingSessions && (
           <div className="session-manager-entry">
-            <button className="primary" onClick={() => { setEditing(null); setSessionMode("smart"); setManagingSessions(true); }}>
+            <button className="primary" onClick={() => manage("smart")}>
               <Clock3 size={14} /> Find a time for me
             </button>
-            <button className="secondary" onClick={() => { setEditing(null); setSessionMode("exact"); setManagingSessions(true); }}>
+            <button className="secondary" onClick={() => manage("exact")}>
               <Pencil size={14} /> Manage sessions
             </button>
-            <span className="micro muted">Add hours to this project, or choose exact times to manage sessions.</span>
+            <span className="micro muted">Find time for additional work, or manage sessions to shorten hours and remove days.</span>
           </div>
         )}
         {managingSessions ? (
-          <SessionManager item={item} state={state} initialMode={sessionMode} onSaved={onState} onClose={() => setManagingSessions(false)} />
+          <SessionManager key={`${sessionMode}-${sessionRemaining}`} item={item} state={state} initialMode={sessionMode} initialSessions={sessionDrafts} initialRemainingMinutes={sessionRemaining} initialProgressCompleted={sessionRemaining === undefined ? undefined : completed} onSaved={onState} onClose={() => setManagingSessions(false)} />
         ) : sessions.length ? (
           sessions.map((s) => (
             <div key={s.id}>
@@ -427,11 +424,11 @@ export function WorkDetails({
               {editing === s.id && (
                 <>
                   {item.dailyPlan?.length ? (
-                    <button className="secondary" onClick={() => { setEditing(null); setManagingSessions(true); }}>
+                    <button className="secondary" onClick={() => manage("exact")}>
                       <Pencil size={14} /> Edit daily hours and sessions
                     </button>
                   ) : (
-                    <SessionEditor session={s} state={state} command={command} />
+                    <SessionEditor session={s} state={state} command={command} onResize={resized => manage("exact", undefined, resized)} />
                   )}
                   <div className="form-actions">
                     <button
@@ -524,17 +521,22 @@ export function WorkDetails({
           <button
             className="secondary"
             disabled={busy || !validRemaining || (remainingMinutes === undefined && completed === item.progressCompleted)}
-            onClick={() =>
-              command({
+            onClick={() => {
+              if (remainingMinutes !== undefined && (item.dailyPlan ?? []).reduce((sum, day) => sum + day.minutes, 0) > Math.ceil(remainingMinutes / state.settings.slotMinutes) * state.settings.slotMinutes) {
+                manage("exact", remainingMinutes);
+                return;
+              }
+              return command({
                 type: "progress",
                 itemId: item.id,
                 ...(remainingMinutes !== undefined ? { remainingMinutes } : {}),
                 progressCompleted: completed,
-              })
-            }
+              });
+            }}
           >
             Save progress
           </button>
+          {!!item.dailyPlan?.length && <p className="micro muted">To change which days you work or how many hours each day needs, use Edit hours and days. You can update remaining effort in the same save.</p>}
           <div className="form-grid progress-status">
             <Field label="Waiting reason (if pausing)">
               <input
