@@ -3416,3 +3416,62 @@ small {
     scroll-behavior: auto !important;
   }
 }
+/* Fixed meetings and time off remain visible across calendar work filters. */
+.fixed-block-meeting { --fixed-block-accent: #9fb9d7; --fixed-block-fill: #293846; --fixed-block-text: #dfebf8; }
+.fixed-block-time_off { --fixed-block-accent: #b8bcaa; --fixed-block-fill: #32372f; --fixed-block-text: #e7eadf; }
+.fixed-block-ribbon {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  height: 26px;
+  width: calc(100% - 6px);
+  margin: 0 3px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--fixed-block-accent) 45%, transparent);
+  border-left: 3px solid var(--fixed-block-accent);
+  border-radius: 4px;
+  background: var(--fixed-block-fill);
+  color: var(--fixed-block-text);
+  text-align: left;
+  pointer-events: auto;
+  overflow: hidden;
+}
+.fixed-block-ribbon svg { flex-shrink: 0; }
+.fixed-block-time { flex-shrink: 0; font-size: 9px; font-variant-numeric: tabular-nums; }
+.fixed-block-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.fixed-block-ribbon:hover:enabled, .agenda-fixed-block:hover:enabled { filter: brightness(1.13); }
+.fixed-block-ribbon:focus-visible, .agenda-fixed-block:focus-visible, .timed-fixed-block:focus-visible { outline: 2px solid var(--fixed-block-accent); outline-offset: -2px; }
+.fixed-block-ribbon:disabled, .agenda-fixed-block:disabled { opacity: 1; }
+.is-selecting-dates .fixed-block-ribbon, .is-picking-booking-date .fixed-block-ribbon { pointer-events: none; }
+.agenda-fixed-block { background: color-mix(in srgb, var(--fixed-block-fill) 45%, transparent); }
+.agenda-fixed-icon { display: flex; flex-shrink: 0; color: var(--fixed-block-accent); }
+.agenda-fixed-title { min-width: 0; overflow-wrap: anywhere; }
+.agenda-fixed-title strong { color: var(--fixed-block-text); }
+.agenda-fixed-title small { color: var(--fixed-block-accent); }
+.agenda-fixed-block .agenda-end { flex-shrink: 0; white-space: nowrap; }
+.agenda h3 { gap: 10px; flex-wrap: wrap; }
+.timed-calendar .timed-fixed-block { border-inline-start: 3px solid var(--fixed-block-accent); cursor: pointer; }
+@container (max-width: 902px) {
+  .fixed-block-ribbon { gap: 4px; padding: 0 4px; }
+  .fixed-block-time { font-size: 8px; }
+  .fixed-block-title { font-size: 9px; }
+}
+@container (max-width: 492px) {
+  .fixed-block-ribbon { gap: 3px; padding: 0 3px; }
+  .fixed-block-ribbon svg { width: 10px; }
+  .fixed-block-time { display: none; }
+  .fixed-block-title { font-size: 8px; }
+}
+
+/* Fixed commitment form and workspace entry point. */
+.meeting-form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.meeting-form .form-actions { flex-wrap: wrap; }
+.meeting-work-changes > div { border-top: 1px solid var(--border); padding: 10px 0; }
+.meeting-work-changes p, .meeting-readonly p { overflow-wrap: anywhere; }
+.meeting-work-changes p { font-size: 12px; margin: 5px 0; }
+.meeting-capacity { margin: 16px 0; }
+.meeting-capacity p { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; margin: 6px 0; font-size: 12px; }
+.focus-meeting { background: #24333a; border-color: #465e6a; }
+.heading-actions { flex-wrap: wrap; justify-content: flex-end; }
+@media (min-width: 1001px) { .heading-actions { max-width: 440px; } }

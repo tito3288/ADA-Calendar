@@ -7,7 +7,8 @@ import "@fullcalendar/react/skeleton.css";
 import "@fullcalendar/react/themes/classic/theme.css";
 import "@fullcalendar/react/themes/classic/palette.css";
 import type { AppState, WorkCommand, WorkItem } from "@/lib/types";
-import { addDays, dayOfWeek, localDateTime, addMinutes } from "@/lib/time";
+import { addDays, dayOfWeek, localDate, localDateTime, addMinutes } from "@/lib/time";
+import { dateLabel, timeLabel } from "./ui";
 
 const colors = {
   software: "#493f65",
@@ -20,6 +21,7 @@ export default function TimedCalendar({
   date,
   items,
   onSelect,
+  onSelectBlock,
   view,
   onCommand,
 }: {
@@ -27,6 +29,7 @@ export default function TimedCalendar({
   date: string;
   items: WorkItem[];
   onSelect: (id: string) => void;
+  onSelectBlock?: (id: string) => void;
   view: "week" | "day";
   onCommand: (command: WorkCommand) => Promise<void>;
 }) {
@@ -45,6 +48,8 @@ export default function TimedCalendar({
       end: localDateTime(d, state.settings.lunchEnd, state.settings.timeZone),
       display: "background",
       color: "#676c77",
+      editable: false,
+      interactive: false,
     },
     {
       id: `reserve-${d}`,
@@ -60,6 +65,8 @@ export default function TimedCalendar({
       ),
       display: "background",
       color: "#c69c42",
+      editable: false,
+      interactive: false,
     },
   ]);
   return (
@@ -84,13 +91,18 @@ export default function TimedCalendar({
         events={[
           ...backgrounds,
           ...state.blocks.map((b) => ({
-            id: b.id,
-            title: b.title,
+            id: `block-${b.id}`,
+            title: `${b.kind === "meeting" ? "Meeting" : "Time off"} · ${b.title}`,
             start: b.start,
             end: b.end,
             editable: false,
-            color: "#555f70",
-            extendedProps: { block: true },
+            startEditable: false,
+            durationEditable: false,
+            interactive: Boolean(onSelectBlock),
+            color: b.kind === "meeting" ? "#384759" : "#41433b",
+            contrastColor: "#e6edf3",
+            className: `timed-fixed-block fixed-block-${b.kind}`,
+            extendedProps: { blockId: b.id },
           })),
           ...state.sessions
             .filter(
@@ -112,7 +124,23 @@ export default function TimedCalendar({
               };
             }),
         ]}
+        eventDidMount={(info) => {
+          const blockId = info.event.extendedProps.blockId as string | undefined;
+          const block = state.blocks.find((b) => b.id === blockId);
+          if (!block) return;
+          const startDate = localDate(block.start, state.settings.timeZone);
+          const endDate = localDate(block.end, state.settings.timeZone);
+          const label = `${block.kind === "meeting" ? "Meeting" : "Time off"}: ${block.title}, ${dateLabel(startDate)} ${timeLabel(block.start, state.settings.timeZone)}–${startDate === endDate ? "" : `${dateLabel(endDate)} `}${timeLabel(block.end, state.settings.timeZone)} · Fixed unavailable time`;
+          info.el.dataset.blockId = block.id;
+          info.el.setAttribute("aria-label", label);
+          info.el.title = label;
+        }}
         eventClick={(info) => {
+          const blockId = info.event.extendedProps.blockId as string | undefined;
+          if (blockId) {
+            onSelectBlock?.(blockId);
+            return;
+          }
           const id = info.event.extendedProps.workItemId as string | undefined;
           if (id) onSelect(id);
         }}
@@ -120,7 +148,7 @@ export default function TimedCalendar({
           const start = info.event.startStr;
           const end = info.event.endStr;
           info.revert();
-          if (start && end)
+          if (start && end && !info.event.extendedProps.blockId && state.sessions.some((s) => s.id === info.event.id))
             void onCommand({
               type: "move",
               sessionId: info.event.id,
@@ -133,7 +161,7 @@ export default function TimedCalendar({
           const end = info.event.endStr;
           const original = state.sessions.find((s) => s.id === info.event.id);
           info.revert();
-          if (start && end && original)
+          if (start && end && original && !info.event.extendedProps.blockId)
             void onCommand({
               type: "schedule",
               itemId: original.workItemId,
@@ -148,8 +176,9 @@ export default function TimedCalendar({
         }}
       />
       <p className="micro muted">
-        Amber shading is your interruption reserve. Open a work item to change a
-        session with the keyboard. Protected sessions cannot be dragged.
+        Meetings and time off are fixed; work is scheduled around them. Open a calendar event for details.
+        {state.settings.reserveMinutes > 0 && " Amber shading is your interruption reserve."}
+        {" "}Protected sessions cannot be dragged.
       </p>
     </div>
   );

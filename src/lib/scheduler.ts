@@ -813,6 +813,7 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
       }
       if (command.type === "block") {
         if (!isInstant(command.block.start) || !isInstant(command.block.end) || minutesBetween(command.block.start, command.block.end) <= 0) { errors.push(conflict("invalid_block", "Unavailable time needs a valid start and end.")); continue; }
+        if (!command.block.title.trim()) { errors.push(conflict("invalid_block", "Meetings and time off need a title.")); continue; }
         const index = draft.blocks.findIndex((block) => block.id === command.block.id);
         if (command.remove) {
           if (index < 0) errors.push(conflict("unknown_block", "This unavailable block no longer exists."));
@@ -821,7 +822,7 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
           if (index >= 0) draft.blocks[index] = clone(command.block); else draft.blocks.push(clone(command.block));
           changedBlocks.push(command.block);
         }
-        summaries.push(`${command.remove ? "Removed" : "Updated"} unavailable time: ${command.block.title}.`);
+        summaries.push(`${command.remove ? "Removed" : index >= 0 ? "Updated" : "Added"} ${command.block.kind === "meeting" ? "meeting" : "time off"}: ${command.block.title}.`);
         continue;
       }
       if (command.type === "move") {
@@ -987,13 +988,23 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
       if (trimming) errors.push(trimming);
     }
     if (errors.length) return fail(errors);
+    // A meeting changes availability, not how much project effort the owner
+    // chose to reserve. Broad effort allocation cannot safely reconstruct an
+    // intentionally partial booking; require its explicit move instead.
+    const partiallyBookedIds = new Set(commands.every(command => command.type === "block") ? snapshot.items.filter(item => {
+      if (item.remainingMinutes === null || item.dailyPlan?.length) return false;
+      const reserved = snapshot.sessions.filter(session => session.workItemId === item.id).reduce((sum, session) => sum + futureMinutes(session, now), 0);
+      return reserved > 0 && reserved < Math.ceil(item.remainingMinutes / draft.settings.slotMinutes) * draft.settings.slotMinutes;
+    }).map(item => item.id) : []);
     for (const block of changedBlocks) {
       const collisions = draft.sessions.filter((session) => planned(session) && overlap(range(session), range(block)));
       for (const session of collisions) {
-        if (session.protected && !protectedOverride(session.workItemId)) errors.push(conflict("protected_session", "Unavailable time would displace a protected session; explicitly override it.", [session.workItemId]));
+        if (instantMs(session.start) < instantMs(now)) errors.push(conflict("historical_session", "This meeting or time off overlaps work that has already started. Finish or update that work explicitly before changing its reserved time.", [session.workItemId]));
+        else if (session.protected && !protectedOverride(session.workItemId)) errors.push(conflict("protected_session", "Unavailable time would displace a protected session; explicitly override it.", [session.workItemId]));
+        else if (partiallyBookedIds.has(session.workItemId)) errors.push(conflict("partial_booking_displacement", "This project has only some of its remaining effort booked. Move its overlapping sessions explicitly before adding or moving this meeting or time off; its booked hours have not changed.", [session.workItemId]));
         else {
           if (session.protected) replacementProtected.add(session.workItemId);
-          removeFutureSession(draft, session, now); scheduleIds.add(session.workItemId);
+          removeFutureSession(draft, session, now); scheduleIds.add(session.workItemId); forcedDisplacedIds.add(session.workItemId);
         }
       }
     }

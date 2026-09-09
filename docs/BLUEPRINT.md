@@ -29,6 +29,13 @@ Bryan wears four hats: Web (edits/builds), IT, Landings, and Software. Kyle, Wil
 - New external bookings and priority requests notify Bryan. Email links require login. Preview/failed transaction causes no work event/mail. Successful undo causes a corrective event; sent email cannot be recalled.
 - Attach Markdown/PDF/PNG/JPEG/WebP, max five files and 20 MB per work item. Safe Markdown preview, immutable private originals, recoverable removal, external references. Audio uses separate transient private storage.
 
+## September 9: Meetings and time off
+
+- The owner can use **Add meeting** beside Add work to reserve fixed client meetings by title, date and start/end time. Include the client in the title. Time off uses the same flow, with an optional end date. Times use the saved workspace timezone.
+- Meetings and time off are existing unavailable blocks, independent of projects and effort estimates. Their overlap with configured work hours reduces capacity; overlapping lunch/reserve/blocks count once. Saved settings stay authoritative. New tasks and Find a time for me schedule around these blocks.
+- Fixed blocks are visible in month, week, day and agenda, including when work/client filters are active. Every actor can inspect them; only the owner can create, edit or remove them.
+- Every manual addition, edit and removal is previewed before explicit confirmation through the existing scheduler and authorized, version/fingerprint-checked transaction. Preview shows the exact fixed time, any moved work before/after, and resulting availability. Protected displacement needs a fresh explicit owner override. Started/historical work cannot be displaced. Overlapping unknown-total or partially booked projects require an explicit session move first, preserving their booked hours. No credentials, external calendar integration, meeting invitations or database migration are required.
+
 ## September 9: Find a time for me
 
 - New manual work defaults to **Find a time for me**: choose one day or an inclusive range, plus total hours or hours each configured working day. **Choose exact times** remains available.

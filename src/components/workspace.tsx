@@ -6,6 +6,7 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   CalendarDays,
+  CalendarClock,
   Check,
   CheckCircle2,
   ChevronLeft,
@@ -31,13 +32,15 @@ import type {
   Category,
   EmailDraft,
   ScheduleProposal,
+  UnavailableBlock,
   WorkCommand,
 } from "@/lib/types";
 import { addDays } from "@/lib/time";
 import {
   dayOfWeek,
   localDate,
-  localDateTime,
+  instantMs,
+  instantFromMs,
   minutesBetween,
 } from "@/lib/time";
 import { dayCapacity } from "@/lib/scheduler";
@@ -63,6 +66,7 @@ import { BrandLogo } from "./brand-logo";
 import { NotesPanel } from "./notes-panel";
 import { WorkspaceChat } from "./workspace-chat";
 import { CalendarBookingMove } from "./calendar-booking-move";
+import { MeetingForm } from "./meeting-form";
 import type { CalendarBookingMoveSelection } from "@/lib/calendar-booking-move";
 
 type Section = "calendar" | "work" | "requests" | "updates" | "notes";
@@ -204,11 +208,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
   const [notice, setNoticeState] = useState<{ message: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [requestId, setRequestId] = useState<string | null>(null);
-  const [block, setBlock] = useState(false);
-  const [blockTitle, setBlockTitle] = useState("");
-  const [blockStart, setBlockStart] = useState("09:00");
-  const [blockEnd, setBlockEnd] = useState("10:00");
-  const [blockKind, setBlockKind] = useState<"meeting" | "time_off">("meeting");
+  const [block, setBlock] = useState<{ date: string; existing?: UnavailableBlock } | null>(null);
   const owner = state.actor.role === "owner";
   function beginDateSelection() {
     setAssistantDraft(emptyAssistantDraft());
@@ -328,12 +328,15 @@ export function Workspace({ initialState }: { initialState: AppState }) {
         localDate(s.start, state.settings.timeZone) >= today,
     )
     .sort((a, b) => a.start.localeCompare(b.start));
-  const focusDate = currentSessions[0]
-    ? localDate(currentSessions[0].start, state.settings.timeZone)
-    : today;
+  const upcomingBlocks = state.blocks.filter(block => localDate(instantFromMs(instantMs(block.end) - 1), state.settings.timeZone) >= today)
+    .sort((a, b) => a.start.localeCompare(b.start));
+  const focusDate = [currentSessions[0] && localDate(currentSessions[0].start, state.settings.timeZone),
+    upcomingBlocks[0] && (localDate(upcomingBlocks[0].start, state.settings.timeZone) < today ? today : localDate(upcomingBlocks[0].start, state.settings.timeZone))]
+    .filter((day): day is string => !!day).sort()[0] ?? today;
   const nextSessions = currentSessions.filter(
     (s) => localDate(s.start, state.settings.timeZone) === focusDate,
   );
+  const focusBlocks = upcomingBlocks.filter(block => localDate(block.start, state.settings.timeZone) <= focusDate && localDate(instantFromMs(instantMs(block.end) - 1), state.settings.timeZone) >= focusDate);
   const focusCapacity = dayCapacity(state, focusDate);
   const weekStart = addDays(date, 1 - dayOfWeek(date));
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
@@ -645,6 +648,9 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                     <Plus size={17} />
                     {owner ? "Add work" : "Request work"}
                   </button>
+                  {owner && <button className="secondary" onClick={() => setBlock({ date: dateSelection?.start ?? date })}>
+                    <CalendarClock size={16} />Add meeting
+                  </button>}
                 </>
               )}
             </div>
@@ -890,11 +896,15 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                   items={calendarItems}
                   view={view}
                   onSelect={setSelectedId}
+                  onSelectBlock={id => {
+                    const existing = state.blocks.find(block => block.id === id);
+                    if (existing) setBlock({ date: localDate(existing.start, state.settings.timeZone), existing });
+                  }}
                   selectingDates={selectingDates}
                   dateSelection={selectingDates ? dateSelection : null}
                   onDate={pickDate}
                   onMoveBookings={owner ? setCalendarMoveSelection : undefined}
-                  movingBookings={calendarMoveLocked || !!calendarMoveSelection || busy || form || !!selected || findingTime || assistant || settings || help || !!proposal || !!requestId || block || confirmNewSelection || mobileNav}
+                  movingBookings={calendarMoveLocked || !!calendarMoveSelection || busy || form || !!selected || findingTime || assistant || settings || help || !!proposal || !!requestId || !!block || confirmNewSelection || mobileNav}
                   onCommand={async (c) => {
                     try {
                       await command(c);
@@ -914,6 +924,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                     <LockKeyhole size={12} />
                     Protected focus
                   </span>
+                  <span><CalendarClock size={12} />Meetings &amp; time off · fixed time</span>
                   <button className="text-button" onClick={() => setHelp(true)}>
                     Reading this calendar <CircleHelp size={12} />
                   </button>
@@ -1125,7 +1136,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
             </div>
             <h2>One thing at a time.</h2>
             <p className="muted small">
-              Your reserved work for{" "}
+              Your work and meetings for{" "}
               {focusDate === today ? "today" : dateLabel(focusDate)}.
             </p>
             <div className="focus-capacity">
@@ -1147,7 +1158,11 @@ export function Workspace({ initialState }: { initialState: AppState }) {
               </div>
             </div>
             <div className="focus-list">
-              {nextSessions.map((s, i) => {
+              {[...focusBlocks, ...nextSessions].sort((a, b) => instantMs(a.start) - instantMs(b.start)).map((s, i) => {
+                if ("kind" in s) return <button className="focus-card focus-meeting" key={`block-${s.id}`} onClick={() => setBlock({ date: focusDate, existing: s })}>
+                  <div className="focus-card-top"><span>{localDate(s.start, state.settings.timeZone) < focusDate ? "Continues" : timeLabel(s.start, state.settings.timeZone)} — {localDate(s.end, state.settings.timeZone) > focusDate ? dateLabel(localDate(s.end, state.settings.timeZone)) : timeLabel(s.end, state.settings.timeZone)}</span><CalendarClock size={14} /></div>
+                  <strong>{s.title}</strong><small>{s.kind === "meeting" ? "Meeting · fixed time" : "Time off · unavailable"}</small>
+                </button>;
                 const item = state.items.find((w) => w.id === s.workItemId);
                 if (!item) return null;
                 return (
@@ -1179,7 +1194,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                   </button>
                 );
               })}
-              {!nextSessions.length && (
+              {!nextSessions.length && !focusBlocks.length && (
                 <p className="muted">No upcoming sessions reserved.</p>
               )}
             </div>
@@ -1201,7 +1216,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
             {owner && (
               <button
                 className="text-button add-block"
-                onClick={() => setBlock(true)}
+                onClick={() => setBlock({ date })}
               >
                 <Plus size={14} />
                 Add meeting or time off
@@ -1311,7 +1326,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
         key={`helper-${state.workspaceId}-${state.actor.id}-${state.actor.role}`}
         state={state}
         onState={next => setState(current => next.workspaceId === current.workspaceId && next.actor.id === current.actor.id && next.actor.role === current.actor.role && next.version >= current.version ? next : current)}
-        hidden={form || !!selected || findingTime || assistant || settings || help || !!proposal || !!requestId || block || confirmNewSelection || mobileNav || !!calendarMoveSelection}
+        hidden={form || !!selected || findingTime || assistant || settings || help || !!proposal || !!requestId || !!block || confirmNewSelection || mobileNav || !!calendarMoveSelection}
       />
       <Modal
         open={form}
@@ -1488,90 +1503,15 @@ export function Workspace({ initialState }: { initialState: AppState }) {
           />
         )}
       </Modal>
-      <Modal
-        open={block}
-        onClose={() => setBlock(false)}
-        title="Meeting or unavailable time"
-      >
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            try {
-              await command({
-                type: "block",
-                block: {
-                  id: crypto.randomUUID(),
-                  title: blockTitle,
-                  start: localDateTime(
-                    date,
-                    blockStart,
-                    state.settings.timeZone,
-                  ),
-                  end: localDateTime(date, blockEnd, state.settings.timeZone),
-                  kind: blockKind,
-                },
-              });
-              setBlock(false);
-            } catch {}
-          }}
-        >
-          <Field label="Title">
-            <input
-              required
-              value={blockTitle}
-              onChange={(e) => setBlockTitle(e.target.value)}
-            />
-          </Field>
-          <Field label="Type">
-            <select
-              value={blockKind}
-              onChange={(e) =>
-                setBlockKind(e.target.value as "meeting" | "time_off")
-              }
-            >
-              <option value="meeting">Meeting</option>
-              <option value="time_off">Time off</option>
-            </select>
-          </Field>
-          <Field label="Date">
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-            />
-          </Field>
-          <div className="form-grid">
-            <Field label="Start">
-              <input
-                type="time"
-                value={blockStart}
-                onChange={(e) => setBlockStart(e.target.value)}
-              />
-            </Field>
-            <Field label="End">
-              <input
-                type="time"
-                value={blockEnd}
-                onChange={(e) => setBlockEnd(e.target.value)}
-              />
-            </Field>
-          </div>
-          <button className="primary" disabled={busy}>
-            Check and add unavailable time
-          </button>
-        </form>
-        {state.blocks.map((b) => (
-          <div className="session-row" key={b.id}>
-            <span>{b.title}</span>
-            <button
-              className="text-button"
-              onClick={() => command({ type: "block", block: b, remove: true })}
-            >
-              Remove
-            </button>
-          </div>
-        ))}
-      </Modal>
+      {block && <MeetingForm
+        key={`${state.workspaceId}:${state.actor.id}:${block.existing?.id ?? "new"}`}
+        state={state}
+        date={block.date}
+        existing={block.existing}
+        onSaved={next => setState(current => next.version >= current.version ? next : current)}
+        onCommitted={(next, date) => { update(next); setDate(date); }}
+        onClose={() => setBlock(null)}
+      />}
       <Modal
         open={help}
         onClose={() => setHelp(false)}
@@ -1589,6 +1529,13 @@ export function Workspace({ initialState }: { initialState: AppState }) {
             Lunch, meetings, time off, and the unexpected-work reserve reduce
             available time. New requester work books only if the entire request
             fits without moving other commitments. Otherwise Bryan decides.
+          </p>
+          <h3>Meetings reserve their exact time.</h3>
+          <p>
+            Use Add meeting for a client call or time off. Enter the date and
+            start/end times, preview any affected work, then confirm. Meetings
+            appear in every calendar view and new work fits around them. Open
+            a meeting to change or remove it.
           </p>
           <h3>Updates stay visible.</h3>
           <p>

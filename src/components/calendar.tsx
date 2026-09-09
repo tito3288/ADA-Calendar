@@ -1,10 +1,10 @@
 "use client";
 import { useEffect, useMemo, useRef, type CSSProperties } from "react";
 import dynamic from "next/dynamic";
-import { LockKeyhole, ArrowUpRight, GripVertical } from "lucide-react";
-import type { AppState, WorkCommand, WorkItem } from "@/lib/types";
+import { LockKeyhole, ArrowUpRight, GripVertical, CalendarClock, TreePalm } from "lucide-react";
+import type { AppState, UnavailableBlock, WorkCommand, WorkItem } from "@/lib/types";
 import type { AssistantDateSelection } from "@/lib/assistant-date-selection";
-import { addDays, dayOfWeek, localDate, minutesBetween } from "@/lib/time";
+import { addDays, dayOfWeek, instantFromMs, instantMs, localDate, localDateTime, minutesBetween } from "@/lib/time";
 import { dayCapacity } from "@/lib/scheduler";
 import { formatHours } from "@/lib/work";
 import { dateLabel, Empty, timeLabel } from "./ui";
@@ -21,17 +21,28 @@ type Props = {
   date: string;
   items: WorkItem[];
   onSelect: (id: string) => void;
+  onSelectBlock?: (id: string) => void;
   onDate: (date: string) => void;
   selectingDates?: boolean;
   dateSelection?: AssistantDateSelection | null;
   onMoveBookings?: (selection: CalendarBookingMoveSelection) => void;
   movingBookings?: boolean;
 };
+function lastBlockDate(block: UnavailableBlock, timeZone: string) {
+  // End times are exclusive: an absence ending at midnight stops the day before.
+  return localDate(instantFromMs(instantMs(block.end) - 1), timeZone);
+}
+function blockLabel(block: UnavailableBlock, timeZone: string) {
+  const startDate = localDate(block.start, timeZone);
+  const endDate = localDate(block.end, timeZone);
+  return `${block.kind === "meeting" ? "Meeting" : "Time off"}: ${block.title}, ${dateLabel(startDate)} ${timeLabel(block.start, timeZone)}–${startDate === endDate ? "" : `${dateLabel(endDate)} `}${timeLabel(block.end, timeZone)} · Fixed unavailable time`;
+}
 export function MonthCalendar({
   state,
   date,
   items,
   onSelect,
+  onSelectBlock,
   onDate,
   selectingDates = false,
   dateSelection,
@@ -105,6 +116,23 @@ export function MonthCalendar({
         };
         const ribbons = items.filter((item) => visibleDates(item).length > 0);
         const lanes: { end: number; count: number }[] = [];
+        const fixedSpans = state.blocks
+          .map((block) => ({
+            block,
+            visible: days.filter((d) => d >= localDate(block.start, state.settings.timeZone) && d <= lastBlockDate(block, state.settings.timeZone)),
+          }))
+          .filter(({ visible }) => visible.length > 0)
+          .sort((a, b) => instantMs(a.block.start) - instantMs(b.block.start))
+          .map(({ block, visible }) => {
+            const from = days.indexOf(visible[0]);
+            const to = days.indexOf(visible[visible.length - 1]);
+            let lane = lanes.findIndex((l) => l.end < from);
+            if (lane < 0) {
+              lane = lanes.length;
+              lanes.push({ end: to, count: 1 });
+            } else lanes[lane] = { end: to, count: lanes[lane].count + 1 };
+            return { block, from, to, lane };
+          });
         const spans = ribbons
           .sort(
             (a, b) =>
@@ -195,6 +223,24 @@ export function MonthCalendar({
                 gridTemplateRows: `repeat(${Math.max(1, lanes.length)}, 26px)`,
               }}
             >
+              {fixedSpans.map(({ block, from, to, lane }) => (
+                <button
+                  key={`block-${block.id}`}
+                  type="button"
+                  className={`fixed-block-ribbon fixed-block-${block.kind}`}
+                  data-block-id={block.id}
+                  draggable={false}
+                  style={{ gridColumn: `${from + 1} / ${to + 2}`, gridRow: lane + 1 }}
+                  disabled={selectingDates || !!move.source && !move.isDragging || !onSelectBlock}
+                  onClick={() => { if (!move.suppressClick()) onSelectBlock?.(block.id); }}
+                  aria-label={blockLabel(block, state.settings.timeZone)}
+                  title={blockLabel(block, state.settings.timeZone)}
+                >
+                  {block.kind === "meeting" ? <CalendarClock size={12} aria-hidden="true" /> : <TreePalm size={12} aria-hidden="true" />}
+                  <span className="fixed-block-time">{localDate(block.start, state.settings.timeZone) < days[from] ? "Continues" : timeLabel(block.start, state.settings.timeZone)}</span>
+                  <span className="fixed-block-title">{block.title}</span>
+                </button>
+              ))}
               {spans.map(({ item, from, to, lane }) => {
                 const client = state.clients.find(
                   (c) => c.id === item.clientId,
@@ -294,24 +340,42 @@ export function MonthCalendar({
     </>
   );
 }
-export function Agenda({ state, date, items, onSelect }: Props) {
-  const upcoming = state.sessions
+export function Agenda({ state, date, items, onSelect, onSelectBlock }: Props) {
+  const sessions = state.sessions
     .filter(
       (s) =>
         s.status === "planned" &&
         localDate(s.start, state.settings.timeZone) >= date &&
         items.some((i) => i.id === s.workItemId),
     )
-    .sort((a, b) => a.start.localeCompare(b.start));
+    .map((session) => ({ kind: "session" as const, session, start: session.start, end: session.end, date: localDate(session.start, state.settings.timeZone) }));
+  const sessionDates = new Set(sessions.map(session => session.date));
+  const blocks = state.blocks.flatMap((block) => {
+    const first = localDate(block.start, state.settings.timeZone);
+    const last = lastBlockDate(block, state.settings.timeZone);
+    const from = first < date ? date : first;
+    const visibleDates = new Set<string>();
+    // An absence can span years. Bound daily expansion while keeping unavailable
+    // time alongside every work date already listed in the agenda.
+    for (let d = from, count = 0; d <= last && count < 31; d = addDays(d, 1), count++) visibleDates.add(d);
+    for (const d of sessionDates) if (d >= from && d <= last) visibleDates.add(d);
+    return [...visibleDates].sort().map((d) => {
+      const start = instantFromMs(Math.max(instantMs(block.start), instantMs(localDateTime(d, "00:00", state.settings.timeZone))));
+      const end = instantFromMs(Math.min(instantMs(block.end), instantMs(localDateTime(addDays(d, 1), "00:00", state.settings.timeZone))));
+      const continuesThrough = d < last && !visibleDates.has(addDays(d, 1)) ? last : null;
+      return { kind: "block" as const, block, start, end, date: d, continuesThrough };
+    });
+  });
+  const upcoming = [...sessions, ...blocks].sort((a, b) => instantMs(a.start) - instantMs(b.start));
   const days = [
     ...new Set(
-      upcoming.map((s) => localDate(s.start, state.settings.timeZone)),
+      upcoming.map((entry) => entry.date),
     ),
   ];
   if (!days.length)
     return (
       <Empty title="A little breathing room">
-        No reserved sessions from this date. Unscheduled and waiting projects
+        No work sessions, meetings or time off from this date. Unscheduled and waiting projects
         remain on your plate.
       </Empty>
     );
@@ -322,12 +386,43 @@ export function Agenda({ state, date, items, onSelect }: Props) {
           <h3>
             {dateLabel(d, { weekday: "long", month: "long", day: "numeric" })}
             <span>
-              {formatHours(dayCapacity(state, d).plannedMinutes)} planned
+              {formatHours(dayCapacity(state, d).plannedMinutes)} work planned · {formatHours(dayCapacity(state, d).availableMinutes)} left
             </span>
           </h3>
           {upcoming
-            .filter((s) => localDate(s.start, state.settings.timeZone) === d)
-            .map((s) => {
+            .filter((entry) => entry.date === d)
+            .map((entry) => {
+              if (entry.kind === "block") {
+                const { block, start, end } = entry;
+                return (
+                  <button
+                    type="button"
+                    className={`agenda-item agenda-fixed-block fixed-block-${block.kind}`}
+                    key={`block-${block.id}`}
+                    data-block-id={block.id}
+                    draggable={false}
+                    onClick={() => onSelectBlock?.(block.id)}
+                    disabled={!onSelectBlock}
+                    aria-label={blockLabel(block, state.settings.timeZone)}
+                  >
+                    <span className="agenda-time">
+                      {instantMs(start) > instantMs(block.start) ? "Continues" : timeLabel(start, state.settings.timeZone)}
+                      <small>{localDate(end, state.settings.timeZone) > d ? "Midnight" : timeLabel(end, state.settings.timeZone)}</small>
+                    </span>
+                    <span className="agenda-fixed-icon" aria-hidden="true">{block.kind === "meeting" ? <CalendarClock size={15} /> : <TreePalm size={15} />}</span>
+                    <span className="agenda-fixed-title">
+                      <strong>{block.title}</strong>
+                      <small>{block.kind === "meeting" ? "Meeting" : "Time off"} · Fixed time</small>
+                      {entry.continuesThrough && <small>Continues through {dateLabel(entry.continuesThrough, { month: "short", day: "numeric", year: "numeric" })}</small>}
+                    </span>
+                    <span className="agenda-end">
+                      {formatHours(minutesBetween(start, end))}
+                      <ArrowUpRight size={16} aria-hidden="true" />
+                    </span>
+                  </button>
+                );
+              }
+              const s = entry.session;
               const item = state.items.find((i) => i.id === s.workItemId)!;
               return (
                 <button

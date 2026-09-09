@@ -31,7 +31,8 @@ export const sessionSchema = z.object({
   focusOverrideMinutes: z.number().int().min(15).max(480).multipleOf(15).optional(),
 }).strict();
 const override = { overrideProtected: z.boolean().optional(), overrideDeadline: z.boolean().optional() };
-const blockSchema = z.object({ id: idSchema, title: z.string().min(1).max(200), start: instantSchema, end: instantSchema, kind: z.enum(["meeting", "time_off"]) }).strict();
+const blockSchema = z.object({ id: idSchema, title: z.string().trim().min(1).max(200), start: instantSchema, end: instantSchema, kind: z.enum(["meeting", "time_off"]) }).strict()
+  .refine(block => !isInstant(block.start) || !isInstant(block.end) || Date.parse(block.end) > Date.parse(block.start), "Unavailable time must end after it starts.");
 export const smartFitRequestSchema = z.object({
   startDate: dateSchema, endDate: dateSchema,
   minutes: z.number().int().min(15).max(100_000).multipleOf(15),
