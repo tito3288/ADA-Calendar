@@ -1,13 +1,15 @@
 "use client";
-import { useMemo, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, type CSSProperties } from "react";
 import dynamic from "next/dynamic";
-import { LockKeyhole, ArrowUpRight } from "lucide-react";
+import { LockKeyhole, ArrowUpRight, GripVertical } from "lucide-react";
 import type { AppState, WorkCommand, WorkItem } from "@/lib/types";
 import type { AssistantDateSelection } from "@/lib/assistant-date-selection";
 import { addDays, dayOfWeek, localDate, minutesBetween } from "@/lib/time";
 import { dayCapacity } from "@/lib/scheduler";
 import { formatHours } from "@/lib/work";
 import { dateLabel, Empty, timeLabel } from "./ui";
+import { calendarBookingMoveSourceUnavailableReason, type CalendarBookingMoveSelection } from "@/lib/calendar-booking-move";
+import { useCalendarBookingDrag } from "./use-calendar-booking-drag";
 
 const TimedCalendar = dynamic(() => import("./timed-calendar"), {
   ssr: false,
@@ -22,6 +24,8 @@ type Props = {
   onDate: (date: string) => void;
   selectingDates?: boolean;
   dateSelection?: AssistantDateSelection | null;
+  onMoveBookings?: (selection: CalendarBookingMoveSelection) => void;
+  movingBookings?: boolean;
 };
 export function MonthCalendar({
   state,
@@ -31,10 +35,20 @@ export function MonthCalendar({
   onDate,
   selectingDates = false,
   dateSelection,
+  onMoveBookings,
+  movingBookings = false,
 }: Props) {
   const first = date.slice(0, 7) + "-01";
   const start = addDays(first, -(dayOfWeek(first) % 7));
   const today = localDate(new Date().toISOString(), state.settings.timeZone);
+  const canMove = Boolean(onMoveBookings && state.actor.role === "owner" && !selectingDates && !movingBookings);
+  const move = useCalendarBookingDrag(state, canMove, onMoveBookings);
+  const movePicker = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    // Keep keyboard/touch destination controls discoverable even when a handle
+    // was selected in a lower week; never shift focus during a native drag.
+    if (move.source && !move.isDragging) movePicker.current?.focus();
+  }, [move.source, move.isDragging]);
   const weeks = useMemo(
     () =>
       Array.from({ length: 6 }, (_, w) =>
@@ -43,8 +57,29 @@ export function MonthCalendar({
     [start],
   );
   return (
+    <>
+    {canMove && (
+      <div className="calendar-booking-drag-tools">
+        {move.source && !move.isDragging ? (
+          <section ref={movePicker} tabIndex={-1} className="calendar-booking-drag-picker" aria-label="Choose a day for booked hours">
+            <div>
+              <p className="eyebrow">MOVE BOOKED HOURS</p>
+              <strong>{move.source.label}</strong>
+              <p>{formatHours(move.source.minutes)} from {dateLabel(move.source.date)}. Choose another day below, or enter a date. You’ll review the time before saving.</p>
+            </div>
+            <div className="calendar-booking-drag-picker-actions">
+              <label>Move booking to date<input type="date" value={move.destination} onChange={e => move.setDestination(e.target.value)} /></label>
+              <button className="primary" disabled={!move.destination} onClick={() => move.chooseDay(move.destination)}>Preview move</button>
+              <button className="secondary" onClick={move.cancel}>Cancel move</button>
+            </div>
+          </section>
+        ) : <p className="calendar-booking-drag-hint"><GripVertical size={14} /> Drag booked hours to another day, or use the move handle. Review before saving.</p>}
+        <p className="calendar-booking-drag-status" role="status">{move.isDragging ? "" : move.message}</p>
+        {move.isDragging && move.source && <p className="calendar-booking-drag-active" role="status">{move.hover?.reason || `Move ${formatHours(move.source.minutes)} to another day · review before saving`}</p>}
+      </div>
+    )}
     <div
-      className={`month-calendar ${selectingDates ? "is-selecting-dates" : ""}`}
+      className={`month-calendar ${selectingDates ? "is-selecting-dates" : ""} ${move.source ? "is-moving-bookings" : ""} ${move.source && !move.isDragging ? "is-picking-booking-date" : ""}`}
       aria-label="Month workload calendar"
     >
       <div className="weekday-head">
@@ -92,6 +127,9 @@ export function MonthCalendar({
             className="calendar-week"
             key={week}
             style={{ "--ribbon-lanes": lanes.length } as CSSProperties}
+            onDragOver={e => move.dragOverWeek(e, days)}
+            onDrop={e => move.dropOnWeek(e, days)}
+            onDragLeave={move.leaveWeek}
           >
             <div className="day-backgrounds">
               {days.map((d) => {
@@ -107,8 +145,9 @@ export function MonthCalendar({
                 return (
                   <button
                     key={d}
-                    className={`day-cell ${d.slice(0, 7) !== first.slice(0, 7) ? "outside-month" : ""} ${d === today ? "is-today" : d < today ? "is-past" : ""} ${!isWorkday ? "weekend" : ""} ${inSelection ? "date-selected" : ""} ${dateSelection && (d === dateSelection.start || d === dateSelection.end) ? "date-endpoint" : ""}`}
-                    onClick={() => onDate(d)}
+                    data-date={d}
+                    className={`day-cell ${d.slice(0, 7) !== first.slice(0, 7) ? "outside-month" : ""} ${d === today ? "is-today" : d < today ? "is-past" : ""} ${!isWorkday ? "weekend" : ""} ${inSelection ? "date-selected" : ""} ${dateSelection && (d === dateSelection.start || d === dateSelection.end) ? "date-endpoint" : ""} ${move.hover?.date === d ? move.hover.reason ? "booking-drop-blocked" : "booking-drop-target" : ""}`}
+                    onClick={() => { if (!move.suppressClick()) { if (move.source) move.chooseDay(d); else onDate(d); } }}
                     aria-pressed={selectingDates ? inSelection : undefined}
                     aria-label={`${dateLabel(d, { weekday: "long", month: "long", day: "numeric" })}, ${isWorkday ? `${formatHours(capacity.availableMinutes)} available, ${formatHours(capacity.plannedMinutes)} planned` : "Non-working day"}`}
                     title={
@@ -160,17 +199,21 @@ export function MonthCalendar({
                 const client = state.clients.find(
                   (c) => c.id === item.clientId,
                 );
+                const label = `${client?.name} · ${item.title}`;
+                const segments = days.slice(from, to + 1).map(d => {
+                  const sessions = state.sessions.filter(s => s.workItemId === item.id && s.status === "planned" && localDate(s.start, state.settings.timeZone) === d);
+                  const sessionIds = sessions.map(s => s.id);
+                  const minutes = sessions.reduce((sum, s) => sum + minutesBetween(s.start, s.end), 0);
+                  const reason = minutes ? calendarBookingMoveSourceUnavailableReason(state, sessionIds, new Date().toISOString()) : null;
+                  return { d, sessions, sessionIds, minutes, reason, draggable: canMove && minutes > 0 && !reason };
+                });
                 return (
+                  <div key={item.id} className={`project-ribbon-lane category-${item.category}`} data-work-item-id={item.id} style={{ gridColumn: `${from + 1} / ${to + 2}`, gridRow: lane + 1 }}>
                   <button
-                    key={item.id}
-                    disabled={selectingDates}
-                    title={`${client?.name} · ${item.title}`}
-                    onClick={() => onSelect(item.id)}
+                    disabled={selectingDates || !!move.source && !move.isDragging}
+                    title={label}
+                    onClick={() => { if (!move.suppressClick()) onSelect(item.id); }}
                     className={`project-ribbon category-${item.category} ${item.status === "waiting" ? "ribbon-waiting" : ""}`}
-                    style={{
-                      gridColumn: `${from + 1} / ${to + 2}`,
-                      gridRow: lane + 1,
-                    }}
                   >
                     <span
                       className="ribbon-segments"
@@ -178,23 +221,18 @@ export function MonthCalendar({
                         gridTemplateColumns: `repeat(${to - from + 1}, 1fr)`,
                       }}
                     >
-                      {days.slice(from, to + 1).map((d) => {
-                        const sessions = state.sessions.filter(
-                          (s) =>
-                            s.workItemId === item.id &&
-                            s.status === "planned" &&
-                            localDate(s.start, state.settings.timeZone) === d,
-                        );
-                        const minutes = sessions.reduce(
-                          (n, s) => n + minutesBetween(s.start, s.end),
-                          0,
-                        );
+                      {segments.map(({ d, sessions, sessionIds, minutes, draggable }) => {
                         return (
                           <span
                             key={d}
+                            data-booking-date={minutes ? d : undefined}
+                            data-work-item-id={minutes ? item.id : undefined}
+                            draggable={draggable}
+                            onDragStart={e => move.startDrag(e, sessionIds, label)}
+                            onDragEnd={move.endDrag}
                             className={
                               minutes
-                                ? "ribbon-reserved"
+                                ? `ribbon-reserved ${draggable ? "booking-draggable" : ""}`
                                 : d >= item.windowStart &&
                                     d <=
                                       (item.windowEnd ||
@@ -234,6 +272,18 @@ export function MonthCalendar({
                       {client?.name} <span>· {item.title}</span>
                     </span>
                   </button>
+                  {canMove && <div className="ribbon-move-handles" style={{ gridTemplateColumns: `repeat(${to - from + 1}, minmax(0, 1fr))` }}>
+                    {segments.map(({ d, sessionIds, minutes, reason, draggable }) => <span key={d}>{draggable && (
+                      <button type="button" className="booking-move-handle" data-booking-date={d} data-work-item-id={item.id}
+                        aria-label={`Move ${label} on ${dateLabel(d)}`} title={reason || `Move ${formatHours(minutes)} from ${dateLabel(d)}`}
+                        disabled={!draggable || !!move.source && !move.isDragging} draggable={draggable}
+                        onClick={e => { e.stopPropagation(); if (!move.suppressClick()) move.pickSource(sessionIds, label); }}
+                        onDragStart={e => move.startDrag(e, sessionIds, label)} onDragEnd={move.endDrag}>
+                        <GripVertical size={14} aria-hidden="true" />
+                      </button>
+                    )}</span>)}
+                  </div>}
+                  </div>
                 );
               })}
             </div>
@@ -241,6 +291,7 @@ export function MonthCalendar({
         );
       })}
     </div>
+    </>
   );
 }
 export function Agenda({ state, date, items, onSelect }: Props) {

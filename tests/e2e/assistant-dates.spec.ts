@@ -67,8 +67,12 @@ test("mocked-provider UI regression: tomorrow-only work has no timeline ribbon t
   const ribbon = calendar.getByTitle("CIDWP · Homepage demo", { exact: true });
   await expect(ribbon).toHaveCount(1);
   // Sunday is column 1: Wednesday-only must occupy 4 / 5, not Tuesday 3 / 5.
-  await expect(ribbon).toHaveCSS("grid-column-start", "4");
-  await expect(ribbon).toHaveCSS("grid-column-end", "5");
+  // The lane now owns grid placement so the move handle can remain a sibling
+  // of the details button, without nesting interactive controls.
+  const lane = ribbon.locator("..");
+  await expect(lane).toHaveClass(/project-ribbon-lane/);
+  await expect(lane).toHaveCSS("grid-column-start", "4");
+  await expect(lane).toHaveCSS("grid-column-end", "5");
   await expect(ribbon.locator(".ribbon-reserved")).toHaveCount(1);
   await expect(ribbon.locator(".ribbon-reserved")).toHaveText("3h");
   await expect(ribbon.locator(".ribbon-span, .ribbon-gap")).toHaveCount(0);

@@ -60,7 +60,8 @@ test("manual owner entry previews before saving, then supports explicit project 
   expect((await state(page.request)).version).toBe(before.version);
   await dialog.getByRole("button", { name: "Confirm changes" }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole("status")).toContainText("Saved locally");
+  // Calendar move guidance has its own live status region; assert the save toast.
+  await expect(page.locator(".toast")).toContainText("Saved locally");
   const saved = await state(page.request);
   const work = saved.items.find(item => item.title === "E2E manual thank-you edit")!;
   expect(work).toBeDefined();

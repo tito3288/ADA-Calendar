@@ -62,6 +62,8 @@ import { RequestReview, RequestAttachments } from "./request-review";
 import { BrandLogo } from "./brand-logo";
 import { NotesPanel } from "./notes-panel";
 import { WorkspaceChat } from "./workspace-chat";
+import { CalendarBookingMove } from "./calendar-booking-move";
+import type { CalendarBookingMoveSelection } from "@/lib/calendar-booking-move";
 
 type Section = "calendar" | "work" | "requests" | "updates" | "notes";
 function DraftCard({
@@ -191,6 +193,8 @@ export function Workspace({ initialState }: { initialState: AppState }) {
   const [dateSelection, setDateSelection] =
     useState<AssistantDateSelection | null>(null);
   const [selectingDates, setSelectingDates] = useState(false);
+  const [calendarMoveSelection, setCalendarMoveSelection] = useState<CalendarBookingMoveSelection | null>(null);
+  const [calendarMoveLocked, setCalendarMoveLocked] = useState(false);
   const [selectionAnchor, setSelectionAnchor] = useState<string | null>(null);
   const [confirmNewSelection, setConfirmNewSelection] = useState(false);
   const [settings, setSettings] = useState(false);
@@ -873,6 +877,13 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                     </div>
                   </div>
                 )}
+                <CalendarBookingMove
+                  state={state}
+                  selection={calendarMoveSelection}
+                  onClose={() => setCalendarMoveSelection(null)}
+                  onInteractionLockChange={setCalendarMoveLocked}
+                  onState={next => setState(current => next.workspaceId === current.workspaceId && next.actor.id === current.actor.id && next.actor.role === current.actor.role && next.version >= current.version ? next : current)}
+                />
                 <CalendarContent
                   state={state}
                   date={date}
@@ -882,6 +893,8 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                   selectingDates={selectingDates}
                   dateSelection={selectingDates ? dateSelection : null}
                   onDate={pickDate}
+                  onMoveBookings={owner ? setCalendarMoveSelection : undefined}
+                  movingBookings={calendarMoveLocked || !!calendarMoveSelection || busy || form || !!selected || findingTime || assistant || settings || help || !!proposal || !!requestId || block || confirmNewSelection || mobileNav}
                   onCommand={async (c) => {
                     try {
                       await command(c);
@@ -1298,7 +1311,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
         key={`helper-${state.workspaceId}-${state.actor.id}-${state.actor.role}`}
         state={state}
         onState={next => setState(current => next.workspaceId === current.workspaceId && next.actor.id === current.actor.id && next.actor.role === current.actor.role && next.version >= current.version ? next : current)}
-        hidden={form || !!selected || findingTime || assistant || settings || help || !!proposal || !!requestId || block || confirmNewSelection || mobileNav}
+        hidden={form || !!selected || findingTime || assistant || settings || help || !!proposal || !!requestId || block || confirmNewSelection || mobileNav || !!calendarMoveSelection}
       />
       <Modal
         open={form}

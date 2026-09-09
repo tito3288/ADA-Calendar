@@ -505,8 +505,50 @@ function planDayOrder(snapshot: ScheduleSnapshot, commands: WorkCommand[], now: 
   }
 }
 
-type BookingEdit = Extract<WorkCommand, { type: "resize_booking" | "move_booking" | "add_booking" }>;
-const isBookingEdit = (command: WorkCommand): command is BookingEdit => ["resize_booking", "move_booking", "add_booking"].includes(command.type);
+type BookingEdit = Extract<WorkCommand, { type: "resize_booking" | "move_booking" | "move_bookings" | "add_booking" }>;
+const isBookingEdit = (command: WorkCommand): command is BookingEdit => ["resize_booking", "move_booking", "move_bookings", "add_booking"].includes(command.type);
+
+/** Fit whole existing bookings into one day's gaps. The segment does not request
+ * an internal order. Longest-first search avoids consuming a long booking's only
+ * opening with a short booking; backtracking handles fragmented days exactly.
+ * Identical remaining capacities are symmetric, and memoization bounds repeated
+ * work. The explicit search ceiling fails closed for pathological custom hours. */
+function placeBookingGroup(snapshot: ScheduleSnapshot, sessions: WorkSession[], date: string, now: string): Map<string, Interval> | null {
+  const slot = snapshot.settings.slotMinutes;
+  const gaps = freeIntervals(snapshot, date, now, false, new Set(sessions.map(session=>session.id))).map(gap=>{
+    const start=instantMs(ceilToSlot(instantFromMs(gap.start),date,snapshot.settings));
+    return {start,slots:Math.max(0,Math.floor((gap.end-start)/MINUTE/slot))};
+  }).filter(gap=>gap.slots>0);
+  const pieces=sessions.map(session=>({session,slots:minutesBetween(session.start,session.end)/slot}))
+    .sort((a,b)=>b.slots-a.slots || instantMs(a.session.start)-instantMs(b.session.start) || a.session.id.localeCompare(b.session.id));
+  if(pieces.some(piece=>!Number.isInteger(piece.slots)||piece.slots<1)) throw new Error("Existing sessions must use positive scheduling increments before they can be moved.");
+  const remaining=gaps.map(gap=>gap.slots), assignments=new Array<number>(pieces.length), exhausted=new Set<string>();
+  if(pieces.reduce((sum,piece)=>sum+piece.slots,0)>remaining.reduce((sum,value)=>sum+value,0)) return null;
+  let visited=0;
+  const search=(index:number):boolean=>{
+    if(index===pieces.length)return true;
+    if(++visited>250_000)throw new Error("These fragmented bookings need a manual review to find a safe fit. No sessions changed.");
+    const key=`${index}:${[...remaining].sort((a,b)=>b-a).join(",")}`;
+    if(exhausted.has(key))return false;
+    const seen=new Set<number>(),needed=pieces[index].slots;
+    for(let gap=0;gap<remaining.length;gap++){
+      const capacity=remaining[gap];
+      if(capacity<needed||seen.has(capacity))continue;
+      seen.add(capacity);remaining[gap]-=needed;assignments[index]=gap;
+      if(search(index+1))return true;
+      remaining[gap]+=needed;
+    }
+    exhausted.add(key);return false;
+  };
+  if(!search(0))return null;
+  const placements=new Map<string,Interval>();
+  for(let gap=0;gap<gaps.length;gap++){
+    let start=gaps[gap].start;
+    const assigned=pieces.filter((_,index)=>assignments[index]===gap).sort((a,b)=>instantMs(a.session.start)-instantMs(b.session.start)||a.session.id.localeCompare(b.session.id));
+    for(const piece of assigned){const end=start+piece.slots*slot*MINUTE;placements.set(piece.session.id,{start,end});start=end;}
+  }
+  return placements;
+}
 // Deterministic opaque identifiers, not authorization tokens. A collision is
 // rejected before writing; neither a retry nor a hash collision can replace work.
 function bookingSessionId(workspaceId: string, operationId: string, index: number): string {
@@ -528,14 +570,14 @@ function planBookingEdit(snapshot: ScheduleSnapshot, commands: WorkCommand[], no
   if (!parsed.success || !isBookingEdit(parsed.data)) return fail([conflict("invalid_booking_edit", "Choose valid dates and positive hours in 15-minute increments. Zero hours would remove a booking and is not supported here.")]);
   const command = parsed.data, draft = clone(snapshot), summary: string[] = [];
   try {
-    const source = command.type !== "add_booking" ? draft.sessions.find(session => session.id === command.sessionId) : undefined;
+    const source = command.type !== "add_booking" ? draft.sessions.find(session => session.id === (command.type === "move_bookings" ? command.sessionIds[0] : command.sessionId)) : undefined;
     if (command.type !== "add_booking" && !source) return fail([conflict("unknown_session", "Choose an existing booked session before editing its hours.")]);
     const itemId = command.type === "add_booking" ? command.itemId : source!.workItemId;
     const item = draft.items.find(candidate => candidate.id === itemId);
     if (!item) return fail([conflict("unknown_work", "This project no longer exists. No new project was created.", [itemId])]);
     if (source && (!isInstant(source.start) || !isInstant(source.end) || minutesBetween(source.start, source.end) <= 0)) return fail([conflict("invalid_session", "The selected booking has invalid times.", [item.id])]);
     if (source && (!planned(source) || instantMs(source.start) < instantMs(now))) return fail([conflict("historical_session", "Completed, cancelled, or already-started sessions cannot be edited here.", [item.id])]);
-    if (source?.protected && command.type !== "add_booking" && !command.overrideProtected) return fail([conflict("protected_session", "Changing this protected booking requires Bryan's explicit override.", [item.id])]);
+    if (source?.protected && command.type !== "add_booking" && (command.type === "move_bookings" || !command.overrideProtected)) return fail([conflict("protected_session", command.type === "move_bookings" ? "This segment contains protected time. Use Manage sessions with an explicit override instead." : "Changing this protected booking requires Bryan's explicit override.", [item.id])]);
     if (item.status === "waiting" && command.type === "add_booking" && command.request.resumeWaiting) {
       item.status = "planned"; item.blockedReason = null;
       summary.push(`Resume ${item.title} when these hours are booked.`);
@@ -571,7 +613,31 @@ function planBookingEdit(snapshot: ScheduleSnapshot, commands: WorkCommand[], no
       return undefined;
     };
     const changedDates = new Set<string>();
-    if (command.type === "add_booking") {
+    if (command.type === "move_bookings") {
+      const selected:WorkSession[]=[],sourceDate=localDate(source!.start,draft.settings.timeZone);
+      for(const id of command.sessionIds){
+        const session=draft.sessions.find(candidate=>candidate.id===id);
+        if(!session)return fail([conflict("unknown_session","One of these bookings no longer exists. Refresh the calendar before moving it.",[item.id])]);
+        if(!isInstant(session.start)||!isInstant(session.end)||minutesBetween(session.start,session.end)<=0)return fail([conflict("invalid_session","One of these bookings has invalid times.",[item.id])]);
+        if(session.workItemId!==item.id||localDate(session.start,draft.settings.timeZone)!==sourceDate)return fail([conflict("booking_group","Move booked sessions from one project on one source day at a time.",[item.id])]);
+        if(!planned(session)||instantMs(session.start)<instantMs(now))return fail([conflict("historical_session","Completed, cancelled, or already-started sessions cannot move with the month segment.",[item.id])]);
+        if(session.protected)return fail([conflict("protected_session","This segment contains protected time. Use Manage sessions with an explicit override instead.",[item.id])]);
+        if(session.usesReserve)return fail([conflict("booking_reserve","This segment uses interruption reserve. Use Manage sessions to keep its reserve permissions explicit.",[item.id])]);
+        selected.push(session);
+      }
+      const daySessions=draft.sessions.filter(session=>session.workItemId===item.id&&planned(session)&&localDate(session.start,draft.settings.timeZone)===sourceDate);
+      if(daySessions.length!==selected.length||daySessions.some(session=>!command.sessionIds.includes(session.id)))
+        return fail([conflict("booking_group_changed","This project's bookings on that day changed. Refresh the calendar and move the complete booked segment again.",[item.id])]);
+      if(command.date===sourceDate)return {...result,summary:["These bookings are already on that day. Nothing changed."]};
+      if(!allowed(command.date))return fail([conflict("outside_allowed_dates","The destination is outside the project's allowed work dates, earliest start, or firm deadline. Adjust the project window separately; it has not changed.",[item.id])]);
+      if(command.date<localDate(now,draft.settings.timeZone))return fail([conflict("historical_session","Work cannot be moved into a past day.",[item.id])]);
+      const placements=placeBookingGroup(draft,selected,command.date,now);
+      if(!placements)return fail([conflict("booking_capacity","All of these bookings cannot fit on that day as whole sessions without changing other work. Choose another day; no bookings moved.",[item.id])]);
+      for(const session of selected){const placement=placements.get(session.id)!;session.start=instantFromMs(placement.start);session.end=instantFromMs(placement.end);setExplicitFocus(session);}
+      changedDates.add(sourceDate);changedDates.add(command.date);
+      const hours=selected.reduce((sum,session)=>sum+minutesBetween(session.start,session.end),0)/60;
+      summary.push(`Move ${hours}h for ${item.title} from ${sourceDate} to ${command.date}. Keep ${selected.length} existing ${selected.length===1?"session":"sessions"}, with the same IDs and individual lengths.`);
+    } else if (command.type === "add_booking") {
       const request = command.request;
       const dates: string[] = [];
       for (let date = request.startDate; date <= request.endDate; date = addDays(date, 1)) if (draft.settings.weekdays.includes(dayOfWeek(date))) dates.push(date);

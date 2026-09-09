@@ -46,6 +46,8 @@ export type WorkCommand =
   | { type: "reorder_day"; date: string; sessionIds: string[]; overrideProtected?: boolean }
   | { type: "resize_booking"; sessionId: string; minutes: number; overrideProtected?: boolean }
   | { type: "move_booking"; sessionId: string; date: string; minutes?: number; startTime?: string; overrideProtected?: boolean }
+  /** Move one month's booked project/day segment; every selected session stays whole. */
+  | { type: "move_bookings"; sessionIds: string[]; date: string }
   | { type: "add_booking"; itemId: string; request: SmartFitRequest }
   | { type: "update"; itemId: string; patch: Partial<WorkItem>; overrideProtected?: boolean; overrideDeadline?: boolean }
   | { type: "schedule"; itemId: string; sessions?: WorkSession[]; urgent?: boolean; overrideProtected?: boolean; overrideDeadline?: boolean }
