@@ -80,6 +80,23 @@ describe("separate workspace chat API", () => {
     expect(state.notifications.every((notification: { status: string }) => notification.status === "captured")).toBe(true);
     expect((await confirm(body)).status).toBe(200); expect((await getDemoState(owner)).events).toHaveLength(1);
   });
+  it("keeps an unfinished reorder private across agenda questions and clears it when a new order is previewed", async () => {
+    const before = await getDemoState(owner);
+    const first = await (await message("Rearrange my tasks today", "pending-order")).json();
+    expect(first.reply.kind).toBe("clarification");
+    const remembered = await store.getAI(owner, "pending-order");
+    expect(remembered.result).toMatchObject({ pendingReorder: { requestText: "Rearrange my tasks today", date: day } });
+    const answer = await (await message("What is on my schedule tomorrow?", "pending-question", { replyToOperationId: "pending-order" })).json();
+    expect(answer.contextDate).toBe("2026-09-10");
+    const continued = await (await message("Can you make the changes please", "pending-resume", { date: "2026-09-10", replyToOperationId: "pending-question" })).json();
+    expect(continued.contextDate).toBe(day);
+    expect(continued.reply.kind).toBe("clarification"); // No ordered names were supplied yet.
+    const ordered = await (await message("I want:\n1. Tyler\n2. Higher Ground\n3. Oral Surgery\n4. Homepage demo", "pending-complete", { replyToOperationId: "pending-resume" })).json();
+    expect(ordered.reply.kind, ordered.reply.message).toBe("preview");
+    expect((await store.getAI(owner, "pending-complete")).result).not.toHaveProperty("pendingReorder");
+    expect(await getDemoState(owner)).toEqual(before);
+    expect(store.commit).not.toHaveBeenCalled();
+  });
   it("resizes existing booked hours without changing effort and replays confirmation safely", async () => {
     const before = await getDemoState(owner);
     const reply = await message("Reduce Homepage demo from 2 hours to 1 hour today", "resize-booking");

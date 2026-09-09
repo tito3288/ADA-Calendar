@@ -117,7 +117,7 @@ export async function POST(req: NextRequest) {
       if (reply.message.length > 7900) reply.message = `${reply.message.slice(0, 7700)}\n\nThis answer is shortened. Open All work or the calendar for the complete list.`;
       reply.sources = reply.sources.slice(0, 100);
       const response: WorkspaceChatResponse = { reply, operationId: input.operationId, stateVersion: freshState.version, asOf, contextDate: result.command ? workspaceChatCommandDate(result.command, freshState) : resolved.date };
-      const record = workspaceChatRecord(actor, freshState, response, input.text, resolved.date, result.intent, previous, result.command);
+      const record = workspaceChatRecord(actor, freshState, response, input.text, resolved.date, result.intent, previous, result.command, "pendingReorder" in result ? result.pendingReorder : undefined);
       await store.finishAI(actor, input.operationId, record, demoEnabled() ? undefined : result.costUsd);
       return respond(response);
     } catch (error) {

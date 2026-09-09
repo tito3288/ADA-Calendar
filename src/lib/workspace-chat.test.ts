@@ -123,10 +123,10 @@ describe("server compilation of same-day reorder", () => {
     const result = compileWorkspaceChatIntent(intent(text, { orderMode: "first", references: ["Tyler"] }), text, fixture(), owner, day, now, "exact-time", []);
     expect(result.command).toBeUndefined(); expect(result.reply.message).toContain("Manage sessions");
   });
-  it("clarifies two same-client sessions instead of guessing one", () => {
+  it("clarifies two same-client projects instead of guessing one", () => {
     const state = fixture(); state.items[1].clientId = "tyler";
     const text = "Put Tyler first today";
-    expect(compileWorkspaceChatIntent(intent(text, { references: ["Tyler"], orderMode: "first" }), text, state, owner, day, now, "test", []).reply.message).toContain("more than one session");
+    expect(compileWorkspaceChatIntent(intent(text, { references: ["Tyler"], orderMode: "first" }), text, state, owner, day, now, "test", []).reply.message).toContain("more than one project");
   });
   it("requires fresh explicit protected override and does not grant one by inference", () => {
     const result = compileWorkspaceChatIntent(intent(reorderText, { overrideProtected: true }), reorderText, fixture(), owner, day, now, "test", []);
