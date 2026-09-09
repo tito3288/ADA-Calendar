@@ -10,6 +10,7 @@ import { buildCommitNotifications, buildDraftNotifications, buildRequestNotifica
 import { attachmentPath, canAccessAttachmentWork, validateUpload } from "./uploads";
 import { assertReviewedProposal } from "./preview";
 import type { PersonalNote } from "../notes";
+import { undoUnavailableReason } from "../undo";
 
 export type AIOperationInput = { id: string; kind: "assistant" | "transcribe"; inputHash: string; reserveUsd: number; parentId?: string };
 export type AIOperationResult = { status: "claimed" | "processing" | "completed" | "failed"; result: unknown | null };
@@ -161,10 +162,10 @@ export function undoDemoEvent(actor: Actor, id: string) {
     trustedActor(state, actor);
     if (actor.role !== "owner") throw new Error("Only Bryan can undo work changes.");
     const event = state.events.find(e => e.id === id);
-    if (!event || event.undoneBy || event.version !== state.version) throw new Error("This event has later changes. Use a new instruction to preserve them.");
+    if (!event) throw new Error("This schedule change is no longer available to undo.");
     const now = new Date().toISOString();
-    const restored = event.before.sessions.filter(s => s.status === "planned" && !event.after.sessions.some(a => a.id === s.id && a.start === s.start && a.end === s.end));
-    if (restored.some(s => s.start < now)) throw new Error("Undo would restore work into the past. Please choose new dates.");
+    const unavailable = undoUnavailableReason(state, event, now);
+    if (unavailable) throw new Error(unavailable);
     const conflicts = validateSchedule({ ...state, ...event.before });
     if (conflicts.length) throw new Error(conflicts.map(c => c.message).join(" "));
     const corrective = saveProposal(state, actor, {

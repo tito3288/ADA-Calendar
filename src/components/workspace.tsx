@@ -61,6 +61,7 @@ import { SettingsPanel } from "./settings-panel";
 import { RequestReview, RequestAttachments } from "./request-review";
 import { BrandLogo } from "./brand-logo";
 import { NotesPanel } from "./notes-panel";
+import { WorkspaceChat } from "./workspace-chat";
 
 type Section = "calendar" | "work" | "requests" | "updates" | "notes";
 function DraftCard({
@@ -1293,6 +1294,12 @@ export function Workspace({ initialState }: { initialState: AppState }) {
           </div>
         )}
       </main>
+      <WorkspaceChat
+        key={`helper-${state.workspaceId}-${state.actor.id}-${state.actor.role}`}
+        state={state}
+        onState={next => setState(current => next.workspaceId === current.workspaceId && next.actor.id === current.actor.id && next.actor.role === current.actor.role && next.version >= current.version ? next : current)}
+        hidden={form || !!selected || findingTime || assistant || settings || help || !!proposal || !!requestId || block || confirmNewSelection || mobileNav}
+      />
       <Modal
         open={form}
         onClose={() => setForm(false)}

@@ -28,6 +28,7 @@ export const workItemSchema = z.object({
 export const sessionSchema = z.object({
   id: idSchema, workItemId: idSchema, start: instantSchema, end: instantSchema, protected: z.boolean(),
   status: z.enum(["planned", "completed", "cancelled"]), usesReserve: z.boolean(),
+  focusOverrideMinutes: z.number().int().min(15).max(480).multipleOf(15).optional(),
 }).strict();
 const override = { overrideProtected: z.boolean().optional(), overrideDeadline: z.boolean().optional() };
 const blockSchema = z.object({ id: idSchema, title: z.string().min(1).max(200), start: instantSchema, end: instantSchema, kind: z.enum(["meeting", "time_off"]) }).strict();
@@ -41,6 +42,14 @@ export const smartFitRequestSchema = z.object({
 export const commandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("create"), item: workItemSchema, sessions: z.array(sessionSchema).max(1000).optional(), smartFit: smartFitRequestSchema.optional(), urgent: z.boolean().optional(), ...override }).strict(),
   z.object({ type: z.literal("fit"), itemId: idSchema, request: smartFitRequestSchema }).strict(),
+  z.object({ type: z.literal("reorder_day"), date: dateSchema,
+    sessionIds: z.array(idSchema).min(1).max(100).refine(ids => new Set(ids).size === ids.length, "Choose each existing session only once."),
+    overrideProtected: z.boolean().optional(),
+  }).strict(),
+  z.object({ type: z.literal("resize_booking"), sessionId: idSchema, minutes: z.number().int().min(15).max(480).multipleOf(15), overrideProtected: z.boolean().optional() }).strict(),
+  z.object({ type: z.literal("move_booking"), sessionId: idSchema, date: dateSchema, minutes: z.number().int().min(15).max(480).multipleOf(15).optional(),
+    startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(), overrideProtected: z.boolean().optional() }).strict(),
+  z.object({ type: z.literal("add_booking"), itemId: idSchema, request: smartFitRequestSchema }).strict(),
   z.object({ type: z.literal("update"), itemId: idSchema, patch: workItemSchema.partial(), ...override }).strict(),
   z.object({ type: z.literal("schedule"), itemId: idSchema, sessions: z.array(sessionSchema).max(1000).optional(), urgent: z.boolean().optional(), ...override }).strict(),
   z.object({ type: z.literal("move"), sessionId: idSchema, start: instantSchema, end: instantSchema, ...override }).strict(),

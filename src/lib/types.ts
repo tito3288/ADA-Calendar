@@ -26,6 +26,8 @@ export interface WorkItem {
 export interface WorkSession {
   id: string; workItemId: string; start: string; end: string; protected: boolean;
   status: "planned" | "completed" | "cancelled"; usesReserve: boolean;
+  /** Owner-authorized focus minimum for this explicit booking, not the project. */
+  focusOverrideMinutes?: number;
 }
 export interface UnavailableBlock { id: string; title: string; start: string; end: string; kind: "meeting" | "time_off" }
 export interface ScheduleSnapshot {
@@ -40,6 +42,11 @@ export interface SmartFitRequest {
 export type WorkCommand =
   | { type: "create"; item: WorkItem; sessions?: WorkSession[]; smartFit?: SmartFitRequest; urgent?: boolean; overrideProtected?: boolean; overrideDeadline?: boolean }
   | { type: "fit"; itemId: string; request: SmartFitRequest }
+  /** Existing sessions only, in their requested chronological order on one day. */
+  | { type: "reorder_day"; date: string; sessionIds: string[]; overrideProtected?: boolean }
+  | { type: "resize_booking"; sessionId: string; minutes: number; overrideProtected?: boolean }
+  | { type: "move_booking"; sessionId: string; date: string; minutes?: number; startTime?: string; overrideProtected?: boolean }
+  | { type: "add_booking"; itemId: string; request: SmartFitRequest }
   | { type: "update"; itemId: string; patch: Partial<WorkItem>; overrideProtected?: boolean; overrideDeadline?: boolean }
   | { type: "schedule"; itemId: string; sessions?: WorkSession[]; urgent?: boolean; overrideProtected?: boolean; overrideDeadline?: boolean }
   | { type: "move"; sessionId: string; start: string; end: string; overrideProtected?: boolean; overrideDeadline?: boolean }

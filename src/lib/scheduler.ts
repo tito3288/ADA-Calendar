@@ -208,6 +208,8 @@ export function validateSchedule(snapshot: ScheduleSnapshot, now = new Date().to
   for (const session of snapshot.sessions) {
     if (sessionIds.has(session.id)) errors.push(conflict("duplicate_session", "Two work sessions have the same identifier.", [session.workItemId]));
     sessionIds.add(session.id);
+    if (session.focusOverrideMinutes !== undefined && (!Number.isInteger(session.focusOverrideMinutes) || session.focusOverrideMinutes < snapshot.settings.slotMinutes || session.focusOverrideMinutes > 480 || session.focusOverrideMinutes % snapshot.settings.slotMinutes !== 0))
+      errors.push(conflict("invalid_focus_override", "A booking-specific focus minimum must use positive 15-minute increments.", [session.workItemId]));
     if (!activeSession(session)) continue;
     const item = snapshot.items.find((candidate) => candidate.id === session.workItemId);
     if (!item) { errors.push(conflict("unknown_work", "A session refers to missing work.", [session.workItemId])); continue; }
@@ -228,7 +230,7 @@ export function validateSchedule(snapshot: ScheduleSnapshot, now = new Date().to
       const dailyBudget = item.dailyPlan?.find(day => day.date === date)?.minutes;
       const focusSessions = item.remainingMinutes === null || dailyBudget !== undefined ? itemSessions.filter(entry => localDate(entry.start, snapshot.settings.timeZone) === date) : itemSessions;
       const sessionBudget = dailyBudget ?? item.remainingMinutes ?? focusSessions.reduce((sum, entry) => sum + futureMinutes(entry, now), 0);
-      const minimum = Math.min(item.minimumSessionMinutes, sessionBudget);
+      const minimum = Math.min(item.minimumSessionMinutes, sessionBudget, session.focusOverrideMinutes ?? Number.POSITIVE_INFINITY);
       const earlierMinutes = focusSessions.filter((entry) => instantMs(entry.end) <= part.start).reduce((sum, entry) => sum + futureMinutes(entry, now), 0);
       const smallerRemainder = focusSessions.at(-1)?.id === session.id && earlierMinutes > 0 && sessionBudget - earlierMinutes <= scheduledMinutes;
       if (scheduledMinutes < minimum && !smallerRemainder) errors.push(conflict("focus_length", `“${item.title}” needs a focus session of at least ${minimum} minutes.`, [item.id]));
@@ -436,6 +438,242 @@ function planSmartFits(snapshot: ScheduleSnapshot, commands: WorkCommand[], acto
   }
 }
 
+/** Reordering is a permutation of existing reservations, never a general replan.
+ * Every unselected reservation stays fixed, as do selected protected anchors
+ * without an explicit owner override. Greedy earliest placement preserves the
+ * requested order while leaving the maximum space for each following block. */
+function planDayOrder(snapshot: ScheduleSnapshot, commands: WorkCommand[], now: string, result: ScheduleProposal): ScheduleProposal {
+  const fail = (errors: ScheduleConflict[]): ScheduleProposal => ({ ...result, status: "infeasible", conflicts: errors });
+  if (commands.length !== 1) return fail([conflict("reorder_mixed_commands", "Rearrange one day separately from other changes. Nothing has changed.")]);
+  const parsed = commandSchema.safeParse(commands[0]);
+  if (!parsed.success || parsed.data.type !== "reorder_day")
+    return fail([conflict("invalid_reorder", "Choose a valid day and a unique ordered list of its existing work sessions.")]);
+  const command = parsed.data;
+  const draft = clone(snapshot);
+  const changed = new Set<string>();
+  try {
+    if (command.date < localDate(now, draft.settings.timeZone))
+      return fail([conflict("historical_session", "Past days cannot be rearranged. Choose a day with work that has not started.")]);
+    const selected: WorkSession[] = [];
+    for (const id of command.sessionIds) {
+      const session = draft.sessions.find(candidate => candidate.id === id);
+      if (!session) return fail([conflict("unknown_session", "A selected session no longer exists. Refresh the day before rearranging it.")]);
+      if (!isInstant(session.start) || !isInstant(session.end) || minutesBetween(session.start, session.end) <= 0)
+        return fail([conflict("invalid_session", "A selected session has invalid times. Correct it before rearranging the day.", [session.workItemId])]);
+      if (!planned(session) || instantMs(session.start) < instantMs(now))
+        return fail([conflict("historical_session", "Completed, cancelled, or already-started sessions cannot be rearranged. Only select work that has not started.", [session.workItemId])]);
+      if (localDate(session.start, draft.settings.timeZone) !== command.date || localDate(session.end, draft.settings.timeZone) !== command.date)
+        return fail([conflict("reorder_day_mismatch", "Every selected session must already belong to the chosen day. Rearranging never moves work to another day.", [session.workItemId])]);
+      const item = draft.items.find(candidate => candidate.id === session.workItemId);
+      if (!item) return fail([conflict("unknown_work", "A selected session's project no longer exists.", [session.workItemId])]);
+      if (!liveItem(item)) return fail([conflict("inactive_work", `“${item.title}” is ${item.status}; only active booked work can be rearranged.`, [item.id])]);
+      selected.push(session);
+    }
+    const ignore = new Set(selected.filter(session => !session.protected || command.overrideProtected).map(session => session.id));
+    let cursor = Math.max(dayBounds(draft, command.date).start, instantMs(ceilToSlot(now, command.date, draft.settings)));
+    for (const session of selected) {
+      if (session.protected && !command.overrideProtected) {
+        if (cursor > instantMs(session.start))
+          return fail([conflict("protected_session", "This order would move protected work. Bryan must explicitly authorize a protected-time override, or choose an order that keeps it in place.", [session.workItemId])]);
+        cursor = instantMs(session.end);
+        continue;
+      }
+      const length = minutesBetween(session.start, session.end);
+      let placement: Interval | undefined;
+      for (const free of freeIntervals(draft, command.date, now, false, ignore)) {
+        const start = instantMs(ceilToSlot(instantFromMs(Math.max(cursor, free.start)), command.date, draft.settings));
+        if (start + length * MINUTE <= free.end) { placement = { start, end: start + length * MINUTE }; break; }
+      }
+      if (!placement) return fail([conflict("reorder_capacity", "This order cannot fit on the chosen day without splitting a session or changing other bookings. Lunch, unavailable time, protected work, saved reserve, and elapsed time stay unchanged. Try a different order; nothing has changed.", [session.workItemId])]);
+      const start = instantFromMs(placement.start), end = instantFromMs(placement.end);
+      if (instantMs(session.start) !== placement.start || instantMs(session.end) !== placement.end) {
+        changed.add(session.workItemId);
+        session.start = start; session.end = end;
+      }
+      ignore.delete(session.id);
+      cursor = placement.end;
+    }
+    const errors = validateSchedule(draft, now);
+    if (errors.length) return fail(errors);
+    return { ...result, sessions: draft.sessions, affectedItemIds: [...changed],
+      summary: changed.size
+        ? [`Rearranged ${selected.length} existing work ${selected.length === 1 ? "session" : "sessions"} on ${command.date}. Session lengths, projects, and other bookings are unchanged.`]
+        : [`These sessions are already in the requested order at the earliest available times on ${command.date}. Nothing changed.`],
+    };
+  } catch (error) {
+    return fail([conflict("invalid_reorder", error instanceof Error ? error.message : "The requested order is invalid; nothing has changed.")]);
+  }
+}
+
+type BookingEdit = Extract<WorkCommand, { type: "resize_booking" | "move_booking" | "add_booking" }>;
+const isBookingEdit = (command: WorkCommand): command is BookingEdit => ["resize_booking", "move_booking", "add_booking"].includes(command.type);
+// Deterministic opaque identifiers, not authorization tokens. A collision is
+// rejected before writing; neither a retry nor a hash collision can replace work.
+function bookingSessionId(workspaceId: string, operationId: string, index: number): string {
+  const input = `${workspaceId}\n${operationId}\n${index}`;
+  const hashes = [2166136261, 2246822507, 3266489909, 668265263].map(seed => {
+    let hash = seed;
+    for (let i = 0; i < input.length; i++) hash = Math.imul(hash ^ input.charCodeAt(i), 16777619);
+    return (hash >>> 0).toString(16).padStart(8, "0");
+  });
+  return `booking-${hashes.join("")}-${index}`;
+}
+
+/** A booking edit changes reserved time only. It must never invoke the general
+ * replanner, which could silently refill a shortened booking from project effort. */
+function planBookingEdit(snapshot: ScheduleSnapshot, commands: WorkCommand[], now: string, result: ScheduleProposal): ScheduleProposal {
+  const fail = (errors: ScheduleConflict[]): ScheduleProposal => ({ ...result, status: "infeasible", conflicts: errors });
+  if (commands.length !== 1) return fail([conflict("booking_mixed_commands", "Preview one booking edit separately from other changes.")]);
+  const parsed = commandSchema.safeParse(commands[0]);
+  if (!parsed.success || !isBookingEdit(parsed.data)) return fail([conflict("invalid_booking_edit", "Choose valid dates and positive hours in 15-minute increments. Zero hours would remove a booking and is not supported here.")]);
+  const command = parsed.data, draft = clone(snapshot), summary: string[] = [];
+  try {
+    const source = command.type !== "add_booking" ? draft.sessions.find(session => session.id === command.sessionId) : undefined;
+    if (command.type !== "add_booking" && !source) return fail([conflict("unknown_session", "Choose an existing booked session before editing its hours.")]);
+    const itemId = command.type === "add_booking" ? command.itemId : source!.workItemId;
+    const item = draft.items.find(candidate => candidate.id === itemId);
+    if (!item) return fail([conflict("unknown_work", "This project no longer exists. No new project was created.", [itemId])]);
+    if (source && (!isInstant(source.start) || !isInstant(source.end) || minutesBetween(source.start, source.end) <= 0)) return fail([conflict("invalid_session", "The selected booking has invalid times.", [item.id])]);
+    if (source && (!planned(source) || instantMs(source.start) < instantMs(now))) return fail([conflict("historical_session", "Completed, cancelled, or already-started sessions cannot be edited here.", [item.id])]);
+    if (source?.protected && command.type !== "add_booking" && !command.overrideProtected) return fail([conflict("protected_session", "Changing this protected booking requires Bryan's explicit override.", [item.id])]);
+    if (item.status === "waiting" && command.type === "add_booking" && command.request.resumeWaiting) {
+      item.status = "planned"; item.blockedReason = null;
+      summary.push(`Resume ${item.title} when these hours are booked.`);
+    }
+    if (!liveItem(item)) return fail([conflict(item.status === "waiting" ? "booking_waiting" : "inactive_work", item.status === "waiting" ? `Confirm that “${item.title}” should resume when these hours are booked.` : `“${item.title}” is ${item.status}. This chat cannot reopen it.`, [item.id])]);
+    const allowed = (date: string) => date >= item.windowStart && (!item.deadline || date <= item.deadline) && (!item.allowedDates.length || item.allowedDates.includes(date));
+    const totalsBefore = new Map<string, number>();
+    for (const session of snapshot.sessions.filter(s => s.workItemId === item.id && futureMinutes(s, now) > 0)) {
+      const date = localDate(session.start, draft.settings.timeZone);
+      totalsBefore.set(date, (totalsBefore.get(date) ?? 0) + futureMinutes(session, now));
+    }
+    let newIndex = 0;
+    const append = (session: WorkSession) => {
+      const id = bookingSessionId(draft.workspaceId, result.operationId, newIndex++);
+      if (draft.sessions.some(existing => existing.id === id)) throw new Error("This booking identifier already exists. Refresh and preview a new operation; no bookings were replaced.");
+      session.id = id; draft.sessions.push(session);
+    };
+    const setExplicitFocus = (session: WorkSession) => {
+      const minutes = minutesBetween(session.start, session.end);
+      if (minutes < item.minimumSessionMinutes) session.focusOverrideMinutes = minutes;
+      else delete session.focusOverrideMinutes;
+    };
+    const place = (date: string, minutes: number, ignore: Set<string>, startTime?: string, prefer?: string): Interval | undefined => {
+      for (const free of freeIntervals(draft, date, now, false, ignore)) {
+        const requested = startTime ? instantMs(localDateTime(date, startTime, draft.settings.timeZone)) : prefer ? instantMs(prefer) : undefined;
+        if (requested !== undefined) {
+          if (requested >= free.start && requested + minutes * MINUTE <= free.end) return { start: requested, end: requested + minutes * MINUTE };
+          continue;
+        }
+        const start = instantMs(ceilToSlot(instantFromMs(free.start), date, draft.settings));
+        if (start + minutes * MINUTE <= free.end) return { start, end: start + minutes * MINUTE };
+      }
+      return undefined;
+    };
+    const changedDates = new Set<string>();
+    if (command.type === "add_booking") {
+      const request = command.request;
+      const dates: string[] = [];
+      for (let date = request.startDate; date <= request.endDate; date = addDays(date, 1)) if (draft.settings.weekdays.includes(dayOfWeek(date))) dates.push(date);
+      const eligible = dates.filter(allowed);
+      if (!dates.length) return fail([conflict("booking_dates", "Choose a range containing a configured working day.", [item.id])]);
+      if (!eligible.length || request.distribution === "per_day" && eligible.length !== dates.length) return fail([conflict("outside_allowed_dates", "The requested bookings must respect the project's earliest start, allowed work dates, and firm deadline.", [item.id])]);
+      const total = request.minutes * (request.distribution === "per_day" ? dates.length : 1);
+      if (total > 100_000) return fail([conflict("invalid_booking_edit", "The requested hours exceed the supported total.", [item.id])]);
+      const chunks = request.distribution === "per_day" ? eligible.map(date => ({ dates: [date], minutes: request.minutes })) : [{ dates: eligible, minutes: request.minutes }];
+      for (const chunk of chunks) {
+        const schedulingItem = { ...item, dailyPlan: undefined, allowedDates: chunk.dates, windowStart: chunk.dates[0], minimumSessionMinutes: Math.min(item.minimumSessionMinutes, chunk.minutes) };
+        const found = allocation(draft, schedulingItem, now, { additionalMinutes: chunk.minutes, until: chunk.dates.at(-1) });
+        if (found.missing) return fail([conflict("booking_capacity", `These hours cannot fit from ${chunk.dates[0]} through ${chunk.dates.at(-1)} without changing existing bookings. Choose fewer hours or other dates.`, [item.id])]);
+        for (const session of found.sessions) { setExplicitFocus(session); append(session); changedDates.add(localDate(session.start, draft.settings.timeZone)); }
+      }
+      summary.push(`Add ${total / 60}h to existing project ${item.title}${request.distribution === "per_day" ? ` (${request.minutes / 60}h each working day)` : ""}.`);
+    } else {
+      const session = source!, sourceDate = localDate(session.start, draft.settings.timeZone), oldMinutes = minutesBetween(session.start, session.end);
+      if (session.usesReserve) return fail([conflict("booking_reserve", "This session uses explicitly reserved interruption time. Use Manage sessions to edit it with its reserve permissions; this chat will not transfer or expand reserve use.", [item.id])]);
+      changedDates.add(sourceDate);
+      if (command.type === "resize_booking") {
+        if (command.minutes === oldMinutes) return { ...result, summary: ["This booking already has those hours. Nothing changed."] };
+        const found = command.minutes < oldMinutes ? { start: instantMs(session.start), end: instantMs(addMinutes(session.start, command.minutes)) }
+          : place(sourceDate, command.minutes, new Set([session.id]), undefined, session.start) ?? place(sourceDate, command.minutes, new Set([session.id]));
+        if (!found) return fail([conflict("booking_capacity", "The larger booking cannot fit on that day without changing other sessions. Choose fewer hours or another day.", [item.id])]);
+        session.start = instantFromMs(found.start); session.end = instantFromMs(found.end); setExplicitFocus(session);
+        summary.push(`Change ${item.title} on ${sourceDate} from ${oldMinutes / 60}h to ${command.minutes / 60}h${command.minutes < oldMinutes ? "; released time is unbooked, not completed work" : ""}.`);
+      } else {
+        const minutes = command.minutes ?? oldMinutes;
+        if (minutes > oldMinutes) return fail([conflict("booking_transfer_hours", "You cannot move more hours than this booking contains. Adding hours is a separate explicit request.", [item.id])]);
+        if (!allowed(command.date)) return fail([conflict("outside_allowed_dates", "The destination must respect this project's earliest start, allowed dates, and firm deadline. Those limits have not changed.", [item.id])]);
+        if (command.date < localDate(now, draft.settings.timeZone)) return fail([conflict("historical_session", "Work cannot be moved into a past day.", [item.id])]);
+        if (minutes < oldMinutes && command.date === sourceDate) return fail([conflict("booking_transfer_day", "Choose a different destination day when moving part of a booking.", [item.id])]);
+        const transferred = minutes === oldMinutes ? session : { ...session };
+        const ignore = minutes === oldMinutes ? new Set([session.id]) : new Set<string>();
+        if (minutes < oldMinutes) { session.end = addMinutes(session.start, oldMinutes - minutes); setExplicitFocus(session); }
+        const found = place(command.date, minutes, ignore, command.startTime);
+        if (!found) return fail([conflict("booking_capacity", command.startTime ? "The requested exact time is unavailable or outside working hours. No other time was substituted." : "That booking cannot fit on the destination day without splitting it or changing other bookings.", [item.id])]);
+        transferred.start = instantFromMs(found.start); transferred.end = instantFromMs(found.end); setExplicitFocus(transferred);
+        if (minutes < oldMinutes) append(transferred);
+        changedDates.add(command.date);
+        summary.push(`Move ${minutes / 60}h of ${item.title} from ${sourceDate} to ${command.date}${minutes < oldMinutes ? `; ${(oldMinutes - minutes) / 60}h stays on ${sourceDate}` : "; keep the same session"}.`);
+      }
+    }
+    const totalsAfter = new Map<string, number>();
+    for (const session of draft.sessions.filter(s => s.workItemId === item.id && futureMinutes(s, now) > 0)) {
+      const date = localDate(session.start, draft.settings.timeZone);
+      totalsAfter.set(date, (totalsAfter.get(date) ?? 0) + futureMinutes(session, now));
+    }
+    const reserved = [...totalsAfter.values()].reduce((sum, value) => sum + value, 0);
+    if (item.remainingMinutes !== null && reserved > Math.ceil(item.remainingMinutes / draft.settings.slotMinutes) * draft.settings.slotMinutes)
+      return fail([conflict("booking_effort", "These bookings exceed the project's remaining-effort estimate. Change the estimate separately if more work is needed; the estimate has not changed.", [item.id])]);
+    if (item.dailyPlan?.length) {
+      const plan = new Map(item.dailyPlan.map(day => [day.date, day.minutes]));
+      for (const date of changedDates) {
+        const before = totalsBefore.get(date) ?? 0, after = totalsAfter.get(date) ?? 0, quota = plan.get(date) ?? 0;
+        // Fill an existing unused quota before expanding it. A released booking
+        // reduces only its own quota; other dates and unbooked hours are retained.
+        const next = Math.max(after, quota + Math.min(0, after - before));
+        if (next) plan.set(date, next); else plan.delete(date);
+        if (next !== quota) summary.push(`Daily booking plan on ${date}: ${quota / 60}h → ${next / 60}h.`);
+      }
+      item.dailyPlan = [...plan].map(([date, minutes]) => ({ date, minutes })).sort((a, b) => a.date.localeCompare(b.date));
+      if (item.remainingMinutes !== null && item.dailyPlan.reduce((sum, day) => sum + day.minutes, 0) > Math.ceil(item.remainingMinutes / draft.settings.slotMinutes) * draft.settings.slotMinutes)
+        return fail([conflict("daily_hours_total", "The changed daily booking plan exceeds remaining effort. Adjust its other daily commitments separately; no estimate was changed.", [item.id])]);
+    }
+    // An unchanged, originally valid final remainder must not become invalid
+    // just because this explicit edit releases an earlier booking. Persist its
+    // existing shorter duration as a booking-only exception, never a new global
+    // minimum. Protected remainders require their own explicit handling.
+    if (!validateSchedule(snapshot, now).length) {
+      for (const session of draft.sessions.filter(s => s.workItemId === item.id && planned(s) && instantMs(s.start) >= instantMs(now))) {
+        const original = snapshot.sessions.find(old => old.id === session.id);
+        const minutes = minutesBetween(session.start, session.end);
+        if (!original || JSON.stringify(original) !== JSON.stringify(session) || minutes >= item.minimumSessionMinutes) continue;
+        const focusErrors = () => validateSchedule(draft, now).filter(error => error.code === "focus_length" && error.itemIds?.includes(item.id)).length;
+        const before = focusErrors(), previous = session.focusOverrideMinutes;
+        if (!before) break;
+        session.focusOverrideMinutes = minutes;
+        const fixed = focusErrors() < before;
+        if (!fixed || session.protected) {
+          if (previous === undefined) delete session.focusOverrideMinutes; else session.focusOverrideMinutes = previous;
+          if (fixed && session.protected) return fail([conflict("protected_session", "This edit would change the focus exception of another protected short booking. Manage that protected booking explicitly first; no sessions changed.", [item.id])]);
+        } else summary.push(`Keep the existing ${minutes / 60}h short booking on ${localDate(session.start, draft.settings.timeZone)} valid at its current time; preserve its originally allowed shorter focus length for that booking only.`);
+      }
+    }
+    const errors = validateSchedule(draft, now);
+    if (errors.length) return fail(errors);
+    const sessionsChanged = JSON.stringify(draft.sessions) !== JSON.stringify(snapshot.sessions);
+    if (!sessionsChanged) return { ...result, summary: ["The booking is already at that time. Nothing changed."] };
+    item.updatedAt = now;
+    refreshForecasts(draft, now, new Set([item.id]));
+    if (item.remainingMinutes !== null && reserved < Math.ceil(item.remainingMinutes / draft.settings.slotMinutes) * draft.settings.slotMinutes) item.forecastDate = null;
+    if (draft.sessions.some(session => session.workItemId === item.id && session.focusOverrideMinutes !== undefined && !snapshot.sessions.some(old => old.id === session.id && old.focusOverrideMinutes === session.focusOverrideMinutes)))
+      summary.push(`Use the explicitly requested shorter focus length for these bookings only; the project's ${item.minimumSessionMinutes / 60}h minimum is unchanged.`);
+    summary.push(`Project total and remaining effort stay ${item.remainingMinutes === null ? "unknown" : "unchanged"}. Other bookings are unchanged.`);
+    return { ...result, items: draft.items, sessions: draft.sessions, affectedItemIds: [item.id], summary };
+  } catch (error) {
+    return fail([conflict("invalid_booking_edit", error instanceof Error ? error.message : "The requested booking edit is invalid.")]);
+  }
+}
+
 /** Pure, deterministic placement decisions. IDs identify the proposal; callers MUST
  * commit against baseVersion atomically and rerun this function after any version race. */
 export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[], actor: Actor, options: PlanOptions = {}): ScheduleProposal {
@@ -447,6 +685,9 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
   if (settingsErrors.length) return fail(settingsErrors);
   if (actor.role !== "owner" && commands.some((command) => command.type !== "create")) return fail([conflict("forbidden", "Requesters can submit new work, but cannot edit existing work.")]);
   if (actor.role !== "owner" && commands.some((command) => ("overrideProtected" in command && command.overrideProtected) || ("overrideDeadline" in command && command.overrideDeadline))) return fail([conflict("forbidden", "Only Bryan can authorize protected-time or deadline overrides.")]);
+  if (actor.role !== "owner" && commands.some(command => command.type === "create" && command.sessions?.some(session => session.focusOverrideMinutes !== undefined))) return fail([conflict("forbidden", "Only Bryan can authorize a booking-specific shorter focus session.")]);
+  if (commands.some(isBookingEdit)) return planBookingEdit(snapshot, commands, now, result);
+  if (commands.some(command => command.type === "reorder_day")) return planDayOrder(snapshot, commands, now, result);
   if (commands.some(command => command.type === "fit" || command.type === "create" && command.smartFit))
     return planSmartFits(snapshot, commands, actor, now, result);
   const draft = clone(snapshot);
@@ -456,6 +697,7 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
   const replacementProtected = new Set<string>();
   const forcedDisplacedIds = new Set<string>();
   const completedDailyIds = new Set<string>();
+  const preserveReservationIds = new Set<string>();
   const globalProtectedOverride = actor.role === "owner" && commands.some((command) => "overrideProtected" in command && command.overrideProtected && (command.type === "create" || command.type === "block" || command.type === "schedule" && command.urgent));
   const individuallyOverridden = new Set(actor.role === "owner" ? commands.flatMap((command) => {
     if (!("overrideProtected" in command) || !command.overrideProtected) return [];
@@ -469,6 +711,9 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
   const errors: ScheduleConflict[] = [];
   try {
     for (const command of commands) {
+      // Day ordering is handled atomically above and cannot enter broad replanning.
+      if (command.type === "reorder_day") return fail([conflict("reorder_mixed_commands", "Rearrange one day separately from other changes.")]);
+      if (isBookingEdit(command)) return fail([conflict("booking_mixed_commands", "Preview booking edits separately from other changes.")]);
       if (command.type === "create") {
         const item = clone(command.item);
         if (draft.items.some((existing) => existing.id === item.id)) { errors.push(conflict("duplicate_item", "This work item already exists.", [item.id])); continue; }
@@ -622,6 +867,12 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
       }
     }
     if (errors.length) return fail(errors);
+    for (const id of explicitIds) {
+      const original = snapshot.items.find(item => item.id === id), item = draft.items.find(item => item.id === id);
+      if (!original || !item || original.remainingMinutes === null || original.remainingMinutes !== item.remainingMinutes || original.estimatedMinutes !== item.estimatedMinutes) continue;
+      const originallyReserved = snapshot.sessions.filter(session => session.workItemId === id).reduce((sum, session) => sum + futureMinutes(session, now), 0);
+      if (originallyReserved < Math.ceil(original.remainingMinutes / draft.settings.slotMinutes) * draft.settings.slotMinutes) preserveReservationIds.add(id);
+    }
     for (const id of scheduleIds) {
       const item = draft.items.find((entry) => entry.id === id)!;
       errors.push(...itemConflicts(draft, item));
@@ -654,11 +905,17 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
         (item.deadline && localDate(session.end, draft.settings.timeZone) > item.deadline)
       ));
       for (const session of invalid) {
+        if (preserveReservationIds.has(id)) { errors.push(conflict("outside_allowed_dates", `The supplied booking for “${item.title}” is outside its allowed work dates or firm deadline. Adjust the project window separately.`, [id])); continue; }
         if (session.protected && instantMs(session.end) > instantMs(now) && !protectedOverride(id)) errors.push(conflict("protected_session", `Changing “${item.title}” would move protected time.`, [id]));
         else {
           if (session.protected && instantMs(session.end) > instantMs(now)) replacementProtected.add(id);
           draft.sessions = draft.sessions.filter((entry) => entry.id !== session.id);
         }
+      }
+      if (preserveReservationIds.has(id)) {
+        const reserved = draft.sessions.filter(session => session.workItemId === id).reduce((sum, session) => sum + futureMinutes(session, now), 0);
+        if (reserved > Math.ceil(item.remainingMinutes! / draft.settings.slotMinutes) * draft.settings.slotMinutes) errors.push(conflict("booking_effort", "These explicit bookings exceed remaining effort. Change the estimate separately before booking more time.", [id]));
+        continue;
       }
       const trimming = trimExcess(draft, item, now, protectedOverride(id));
       if (trimming) errors.push(trimming);
@@ -736,6 +993,10 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
       // Explicitly completing one daily booking releases it; it does not book
       // that same effort again or silently change the project estimate.
       if (completedDailyIds.has(item.id)) continue;
+      // A manual move or explicit replacement of intentionally partial bookings
+      // preserves that reservation decision; it is not a request to fill every
+      // remaining estimated hour. Full-booking/manual reshape rules stay intact.
+      if (preserveReservationIds.has(item.id)) continue;
       settledIds.add(item.id);
       const incomingRequest = requester && !snapshot.items.some((existing) => existing.id === item.id);
       const desiredEnd = target(item);
@@ -837,6 +1098,10 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
       if (lost) return fail([conflict("unknown_effort_displacement", `“${item.title}” has an unknown total. Move its booked sessions explicitly before changing time they occupy.`, [item.id])], requester ? "approval_required" : "infeasible");
     }
     refreshForecasts(draft, now, new Set([...scheduleIds, ...displacedIds]));
+    for (const item of draft.items.filter(item => preserveReservationIds.has(item.id))) {
+      const reserved = draft.sessions.filter(session => session.workItemId === item.id).reduce((sum, session) => sum + futureMinutes(session, now), 0);
+      if (item.remainingMinutes !== null && reserved < Math.ceil(item.remainingMinutes / draft.settings.slotMinutes) * draft.settings.slotMinutes) item.forecastDate = null;
+    }
     const affected = new Set(changes(snapshot, draft));
     for (const command of commands) if (command.type === "client_update") affected.add(command.itemId);
     for (const id of displacedIds) {

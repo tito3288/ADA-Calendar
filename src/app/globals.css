@@ -1635,6 +1635,113 @@ small {
 .toast > button:last-child {
   display: flex;
 }
+.workspace-chat-launcher {
+  position: fixed;
+  right: max(24px, env(safe-area-inset-right));
+  bottom: max(24px, env(safe-area-inset-bottom));
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 52px;
+  padding: 12px 18px;
+  border: 1px solid #8db8a1;
+  border-radius: 28px;
+  background: #bde2ce;
+  color: #19372b;
+  box-shadow: 0 5px 25px #0005;
+  font-weight: 650;
+}
+.workspace-chat-launcher[hidden] { display: none; }
+.workspace-chat-launcher:hover { background: #d2efdf; }
+.workspace-chat-launcher i { width: 7px; height: 7px; border-radius: 50%; background: #315e46; }
+.workspace-chat-overlay { position: fixed; inset: 0; z-index: 50; background: #03080755; }
+.workspace-chat-dialog {
+  position: fixed;
+  z-index: 60;
+  right: max(24px, env(safe-area-inset-right));
+  bottom: max(24px, env(safe-area-inset-bottom));
+  width: min(480px, calc(100vw - 32px));
+  height: min(740px, calc(100dvh - 48px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #526a5d;
+  border-radius: 18px;
+  background: #171f1e;
+  box-shadow: 0 20px 80px #0008;
+  color: #e0e8e4;
+}
+.workspace-chat-header { display: flex; align-items: center; gap: 12px; padding: 20px 20px 17px; border-bottom: 1px solid #35423c; }
+.workspace-chat-header h2 { margin: 0; font-size: 19px; }
+.workspace-chat-header p { margin: 4px 0 0; font-size: 12px; color: #a6b9af; }
+.workspace-chat-header > .icon-button { margin-left: auto; min-width: 44px; min-height: 44px; }
+.workspace-chat-mark { display: grid; place-items: center; width: 42px; height: 42px; flex-shrink: 0; border-radius: 13px; background: #2b4336; color: #bde2ce; }
+.workspace-chat-context { padding: 12px 20px; display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; border-bottom: 1px solid #303e36; background: #1c2822; }
+.workspace-chat-context label { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px; color: #b4c6bc; flex: 1; min-width: 150px; }
+.workspace-chat-context input { flex-basis: 100%; padding: 9px 11px; min-height: 38px; }
+.workspace-chat-context > div { display: flex; gap: 6px; }
+.workspace-chat-context button { min-height: 40px; padding: 8px; border: 1px solid #46584c; border-radius: 7px; color: #c5d9cc; font-size: 11px; }
+.workspace-chat-transcript { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 22px 20px; scrollbar-width: thin; scrollbar-color: #526b5c transparent; }
+.workspace-chat-welcome h3 { margin: 0 0 10px; font-size: 21px; letter-spacing: -0.5px; }
+.workspace-chat-welcome > p { color: #b4c3bb; font-size: 13px; line-height: 1.7; }
+.workspace-chat-suggestions { display: grid; gap: 8px; margin-top: 20px; }
+.workspace-chat-suggestions button { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 12px 14px; min-height: 44px; text-align: left; border: 1px solid #3e5146; border-radius: 9px; background: #202e26; font-size: 12px; }
+.workspace-chat-suggestions svg { flex-shrink: 0; }
+.workspace-chat-message { margin: 0 0 20px; overflow-wrap: anywhere; }
+.workspace-chat-message > strong { font-size: 10px; color: #a8c6b5; }
+.workspace-chat-message > p { margin: 7px 0 0; white-space: pre-wrap; font-size: 13px; line-height: 1.75; }
+.workspace-chat-message.user { background: #2b3d31; padding: 13px 15px; border-radius: 12px 12px 3px 12px; margin-left: 24px; }
+.workspace-chat-message > small { display: block; color: #98a99f; font-size: 10px; margin-top: 10px; }
+.workspace-chat-sources { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 11px; }
+.workspace-chat-sources span { padding: 4px 7px; border-radius: 5px; background: #24352b; color: #aecab8; font-size: 10px; line-height: 1.5; }
+.workspace-chat-preview { border: 1px solid #678673; border-radius: 11px; padding: 16px; margin: 16px 0 0; background: #213027; }
+.workspace-chat-preview .eyebrow { font-size: 9px; margin: 0 0 8px; }
+.workspace-chat-preview h3 { font-size: 16px; margin-bottom: 8px; }
+.workspace-chat-preview > p:not(.eyebrow) { font-size: 12px; color: #b6cabd; line-height: 1.6; }
+.workspace-chat-preview ol { list-style: none; padding: 0; margin: 15px 0; }
+.workspace-chat-preview li { padding: 12px 0; border-top: 1px solid #49604f; }
+.workspace-chat-preview li strong { display: block; font-size: 12px; line-height: 1.5; }
+.workspace-chat-preview li span { display: grid; grid-template-columns: 1fr; gap: 4px; font-size: 11px; margin-top: 6px; color: #b1c4b7; }
+.workspace-chat-preview li b { color: #d4efdd; font-weight: 600; }
+.workspace-chat-hour-impact { display: grid; gap: 5px; padding: 12px; border: 1px solid #506e59; border-radius: 8px; background: #2b4233; margin-top: 14px; }
+.workspace-chat-hour-impact strong { font-size: 17px; color: #d4efdd; }
+.workspace-chat-hour-impact span { font-size: 11px; line-height: 1.6; color: #bdcfc3; }
+.workspace-chat-day-impacts { display: grid; gap: 8px; border-top: 1px solid #49604f; padding-top: 12px; }
+.workspace-chat-day-impacts p { display: grid; grid-template-columns: 1fr auto; gap: 5px; margin: 0; font-size: 12px; }
+.workspace-chat-day-impacts strong { color: #d4efdd; }
+.workspace-chat-day-impacts small { grid-column: 1 / -1; font-size: 10px; color: #b1c4b7; }
+.workspace-chat-preview .workspace-chat-details { margin: 14px 0 0; padding-left: 17px; color: #c3d5c9; }
+.workspace-chat-preview .workspace-chat-details li { font-size: 11px; line-height: 1.7; border: 0; padding: 4px 0; }
+.workspace-chat-preview-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.workspace-chat-preview-actions button { min-height: 44px; flex: 1; justify-content: center; font-size: 11px; padding: 10px; }
+.workspace-chat-preview .workspace-chat-warning { color: #efd49b; }
+.workspace-chat-working { color: #bfe2cf; font-size: 12px; padding: 14px 0; }
+.workspace-chat-undo { margin-top: 18px; padding: 16px; border: 1px solid #597762; border-radius: 11px; background: #223129; }
+.workspace-chat-undo .eyebrow { margin: 0 0 8px; font-size: 9px; color: #bbd6c5; }
+.workspace-chat-undo h3 { margin: 0 0 9px; font-size: 15px; line-height: 1.5; }
+.workspace-chat-undo p:not(.eyebrow) { font-size: 12px; line-height: 1.7; color: #c3d5c9; margin: 10px 0; }
+.workspace-chat-undo .workspace-chat-undo-summary { overflow-wrap: anywhere; }
+.workspace-chat-undo small { display: block; color: #afc4b7; font-size: 10px; }
+.workspace-chat-undo button { width: 100%; justify-content: center; min-height: 44px; margin-top: 6px; gap: 8px; font-size: 12px; }
+.workspace-chat-composer { padding: 14px 18px 12px; border-top: 1px solid #3a4d40; background: #1c2821; }
+.workspace-chat-composer textarea { padding: 12px; min-height: 76px; max-height: 140px; resize: vertical; line-height: 1.6; font-size: 13px; }
+.workspace-chat-composer-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.workspace-chat-composer-actions > button { min-height: 44px; }
+.workspace-chat-composer-actions > .primary { min-width: 44px; margin-left: auto; }
+.workspace-chat-voice, .workspace-chat-reset { display: flex; align-items: center; gap: 6px; padding: 8px; font-size: 11px; color: #c0d4c7; }
+.workspace-chat-voice.recording { color: #ffb5a6; }
+.workspace-chat-footnote, .workspace-chat-demo { margin-top: 6px; color: #a7bbad; font-size: 10px; line-height: 1.5; }
+.workspace-chat-demo { color: #ceb77e; }
+.workspace-chat-composer .error { margin: 0 0 10px; font-size: 12px; }
+@media (max-width: 520px) {
+  .workspace-chat-launcher { right: 16px; bottom: max(16px, env(safe-area-inset-bottom)); min-height: 48px; padding: 10px 15px; }
+  .workspace-chat-dialog { right: 10px; bottom: max(10px, env(safe-area-inset-bottom)); width: calc(100vw - 20px); height: min(760px, calc(100dvh - 20px)); border-radius: 14px; }
+  .workspace-chat-header { padding: 14px; }
+  .workspace-chat-context { padding: 10px 14px; }
+  .workspace-chat-transcript { padding: 18px 14px; }
+  .workspace-chat-composer { padding: 12px; }
+}
 .modal-overlay {
   position: fixed;
   inset: 0;

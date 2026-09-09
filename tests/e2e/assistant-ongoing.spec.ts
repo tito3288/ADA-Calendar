@@ -74,7 +74,7 @@ test("offline ongoing-project conversation corrects the date, clarifies lunch, a
   await expect(dialog.getByText("Not estimated", { exact: true })).toBeVisible();
   await expect(dialog.getByText("4h", { exact: true })).toBeVisible();
   await expect(dialog.getByText("Not fully scheduled", { exact: true })).toBeVisible();
-  await expect(dialog.getByText(/To book more time, use Ask ADA/)).toBeVisible();
+  await expect(dialog.getByText("Use Find a time for me to add hours, or ask ADA. The project total can stay unknown.", { exact: true })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Schedule remaining work" })).toHaveCount(0);
   await dialog.screenshot({ path: testInfo.outputPath("ongoing-project-unknown-total-four-booked-hours.png") });
   await dialog.getByRole("button", { name: "Edit work", exact: true }).click();

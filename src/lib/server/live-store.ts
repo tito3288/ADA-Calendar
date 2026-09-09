@@ -7,6 +7,7 @@ import { assertLiveActor, requireOwner } from "./auth";
 import { getSupabaseAdminClient, getSupabaseServerClient } from "./supabase";
 import { assertReviewedProposal } from "./preview";
 import type { AIOperationInput, AIOperationResult, PrivateAIOperation } from "./demo-store";
+import { undoUnavailableReason } from "../undo";
 
 function check(error: { message: string } | null, operation: string) {
   if (error) throw new Error(`${operation}: ${error.message}`);
@@ -137,11 +138,12 @@ export async function undoLiveEvent(actor: Actor, eventId: string): Promise<AppS
   const trusted = await assertLiveActor(actor); requireOwner(trusted);
   const state = await getLiveState(trusted.id);
   const event = state.events.find((e) => e.id === eventId);
-  if (!event || event.undoneBy || event.version !== state.version) throw new Error("Only the latest unchanged schedule event can be undone. Older changes need a new scheduling instruction.");
+  if (!event) throw new Error("This schedule change is no longer available to undo.");
+  const now = new Date().toISOString();
+  const unavailable = undoUnavailableReason(state, event, now);
+  if (unavailable) throw new Error(unavailable);
   const invalid = validateSchedule({ ...state, ...event.before });
   if (invalid.length) throw new Error("The original schedule is no longer valid. Use a new scheduling instruction instead of undo.");
-  const now = new Date().toISOString();
-  if (event.before.sessions.some((s) => s.status === "planned" && s.start < now && !state.sessions.some((current) => current.id === s.id && current.start === s.start && current.end === s.end))) throw new Error("Undo would restore work in the past. Choose a new opening instead.");
   const proposal: ScheduleProposal = { id: randomUUID(), operationId: `undo/${event.id}`, actorId: trusted.id, baseVersion: state.version, commands: [], status: "ready", requiresApproval: false, ...event.before, affectedItemIds: event.itemIds, summary: [`Undid: ${event.summary.join(" ")}`], conflicts: [], alternatives: [], createdAt: new Date().toISOString() };
   return persist(state, proposal, { undoId: event.id, type: "schedule_undone" });
 }

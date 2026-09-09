@@ -15,6 +15,7 @@ export interface SessionDraft {
   end: string;
   protected: boolean;
   usesReserve: boolean;
+  focusOverrideMinutes?: number;
 }
 
 export function sessionDraft(session: WorkSession, zone: string): SessionDraft {
@@ -32,6 +33,7 @@ export function sessionDraft(session: WorkSession, zone: string): SessionDraft {
     end: clock(session.end),
     protected: session.protected,
     usesReserve: session.usesReserve,
+    ...(session.focusOverrideMinutes !== undefined ? { focusOverrideMinutes: session.focusOverrideMinutes } : {}),
   };
 }
 
@@ -70,6 +72,7 @@ export function draftSession(
     protected: row.protected,
     status: "planned",
     usesReserve: row.usesReserve,
+    ...(row.focusOverrideMinutes !== undefined ? { focusOverrideMinutes: Math.min(row.focusOverrideMinutes, minutes) } : {}),
   };
 }
 
@@ -94,7 +97,9 @@ export function splitSessionDraft(
   return [
     { ...row, end: middle },
     { ...row, id: secondId, start: middle },
-  ];
+  ].map(part => row.focusOverrideMinutes === undefined ? part : { ...part,
+    focusOverrideMinutes: Math.min(row.focusOverrideMinutes, minutesBetween(localDateTime(part.date, part.start, zone), localDateTime(part.date, part.end, zone))),
+  });
 }
 
 /** A manual replacement never changes effort or treats elapsed bookings as completed. */
@@ -166,12 +171,16 @@ export function sessionManagementCommands({
     (sum, session) => sum + minutesBetween(session.start, session.end),
     0,
   );
+  const originallyReserved = planned.filter(session => instantMs(session.start) >= instantMs(now))
+    .reduce((sum, session) => sum + minutesBetween(session.start, session.end), 0);
+  const remaining = item.remainingMinutes === null ? null : Math.ceil(item.remainingMinutes / 15) * 15;
+  if (remaining !== null && total > remaining)
+    throw new Error("These sessions exceed the remaining effort. Update the estimate separately before booking more hours.");
   if (
-    item.remainingMinutes !== null &&
-    total !== Math.ceil(item.remainingMinutes / 15) * 15
+    remaining !== null && originallyReserved >= remaining && total !== remaining
   ) {
     throw new Error(
-      `Reserve all ${Number((item.remainingMinutes / 60).toFixed(2))} remaining hours across future sessions. Removing a row does not reduce the estimate; redistribute its hours or update remaining effort separately.`,
+      `Reserve all ${Number((remaining / 60).toFixed(2))} remaining hours across future sessions. Removing a row does not reduce the estimate; redistribute its hours or update remaining effort separately.`,
     );
   }
   if (item.status === "waiting" && future.length && !resume)

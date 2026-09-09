@@ -61,6 +61,27 @@ const base = (work: WorkItem, sessions: WorkSession[]): ScheduleSnapshot => ({
 });
 
 describe("manual session drafts", () => {
+  it("preserves booking-specific focus when opening, moving, and saving a draft", () => {
+    const original = { ...session("short", "2026-09-14", "09:00", "10:00"), focusOverrideMinutes: 60 };
+    const row = sessionDraft(original, zone);
+    expect(row.focusOverrideMinutes).toBe(60);
+    expect(draftSession({ ...row, start: "10:00", end: "11:00" }, "cedar", zone)).toMatchObject({ focusOverrideMinutes: 60 });
+    const work = item({ estimatedMinutes: null, remainingMinutes: null, minimumSessionMinutes: 120 });
+    const commands = sessionManagementCommands({ item: work, original: [original], rows: [row], zone, now });
+    const proposal = planCommands(base(work,[original]), commands, owner, { now });
+    expect(proposal.status,JSON.stringify(proposal.conflicts)).toBe("ready");
+    expect(proposal.sessions).toEqual([original]); expect(proposal.items[0].minimumSessionMinutes).toBe(120);
+  });
+
+  it("keeps an explicit shorter-focus booking's split pieces valid without lowering project focus", () => {
+    const original = { ...session("short", "2026-09-14", "09:00", "10:00"), focusOverrideMinutes: 60 };
+    const rows = splitSessionDraft(sessionDraft(original, zone), zone, "second");
+    expect(rows.map(row => row.focusOverrideMinutes)).toEqual([30,30]);
+    const work = item({ estimatedMinutes: null, remainingMinutes: null, minimumSessionMinutes: 120 });
+    const proposal = planCommands(base(work,[original]), sessionManagementCommands({item:work,original:[original],rows,zone,now}),owner,{now});
+    expect(proposal.status,JSON.stringify(proposal.conflicts)).toBe("ready");
+    expect(proposal.sessions.map(row => row.focusOverrideMinutes)).toEqual([30,30]); expect(proposal.items[0].minimumSessionMinutes).toBe(120);
+  });
   it("splits a block without changing its minutes, identity, or protection", () => {
     const original = session("old", "2026-09-14", "13:00", "17:00", true);
     const rows = splitSessionDraft(sessionDraft(original, zone), zone, "new");
@@ -138,7 +159,29 @@ describe("manual session drafts", () => {
         zone,
         now,
       }),
-    ).toThrow("Reserve all 10 remaining hours");
+    ).toThrow("exceed the remaining effort");
+  });
+
+  it("preserves intentionally partial known-total bookings on unchanged save, move, and split", () => {
+    const original = [{ ...session("short", "2026-09-14", "09:00", "10:00"), focusOverrideMinutes: 60 }];
+    const work = item({ estimatedMinutes: 120, remainingMinutes: 120, minimumSessionMinutes: 120 });
+    const row = sessionDraft(original[0], zone);
+    for (const rows of [[row], [{...row,date:"2026-09-15"}], splitSessionDraft(row, zone, "piece")]) {
+      const commands=sessionManagementCommands({item:work,original,rows,zone,now});
+      const proposal=planCommands(base(work,original),commands,owner,{now});
+      expect(proposal.status,JSON.stringify(proposal.conflicts)).toBe("ready");
+      expect(proposal.sessions.reduce((sum,s)=>sum+minutesBetween(s.start,s.end),0)).toBe(60);
+      expect(proposal.items[0]).toMatchObject({remainingMinutes:120,estimatedMinutes:120,minimumSessionMinutes:120,forecastDate:null});
+    }
+  });
+
+  it("allows existing partial bookings to fill remaining effort but not exceed it", () => {
+    const work=item({remainingMinutes:180,estimatedMinutes:180});
+    const original=[session("old","2026-09-14")];
+    const rows=[sessionDraft(original[0],zone),sessionDraft(session("new","2026-09-15","09:00","10:00"),zone)];
+    const proposal=planCommands(base(work,original),sessionManagementCommands({item:work,original,rows,zone,now}),owner,{now});
+    expect(proposal.status,JSON.stringify(proposal.conflicts)).toBe("ready"); expect(proposal.sessions).toHaveLength(2);
+    expect(()=>sessionManagementCommands({item:work,original,rows:[...rows,sessionDraft(session("extra","2026-09-16"),zone)],zone,now})).toThrow("exceed the remaining effort");
   });
 
   it("explicitly rebuilds an existing daily plan from the replacement dates", () => {
@@ -230,15 +273,17 @@ describe("manual session drafts", () => {
         now,
       }),
     ).toThrow("Past sessions are history");
-    expect(() =>
-      sessionManagementCommands({
+    const unchanged = sessionManagementCommands({
         item: work,
         original: [past],
         rows: [sessionDraft(past, zone)],
         zone,
         now,
-      }),
-    ).toThrow("Reserve all 2 remaining hours");
+      });
+    const proposal = planCommands(base(work, [past]), unchanged, owner, { now });
+    expect(proposal.status, JSON.stringify(proposal.conflicts)).toBe("ready");
+    expect(proposal.sessions).toEqual([past]);
+    expect(proposal.items[0]).toMatchObject({remainingMinutes:120,estimatedMinutes:120,forecastDate:null});
   });
 
   it("preserves unknown totals when adding or removing all future sessions", () => {
