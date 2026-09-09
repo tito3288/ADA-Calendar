@@ -9,6 +9,9 @@ const minutes = z.number().int().min(0).max(100_000);
 const nullableDate = dateSchema.nullable();
 const statusSchema = z.enum(["planned", "in_progress", "waiting", "completed", "cancelled"]);
 const checklistSchema = z.array(z.object({ id: idSchema, title: z.string().min(1).max(500), done: z.boolean() }).strict()).max(500);
+export const dailyPlanSchema = z.array(z.object({ date: dateSchema, minutes: z.number().int().min(15).max(480).multipleOf(15) }).strict()).max(366)
+  .refine(rows => new Set(rows.map(row => row.date)).size === rows.length, "Use each daily-plan date only once.")
+  .refine(rows => rows.reduce((sum, row) => sum + row.minutes, 0) <= 100_000, "Daily hours exceed the supported total.");
 export const workItemSchema = z.object({
   id: idSchema, clientId: idSchema, title: z.string().trim().min(1).max(200), description: z.string().max(30_000),
   category: z.enum(["web", "it", "landings", "software"]), webKind: z.enum(["edit", "build"]).nullable(),
@@ -17,6 +20,7 @@ export const workItemSchema = z.object({
   windowStart: dateSchema, windowEnd: nullableDate, targetDate: nullableDate, deadline: nullableDate,
   forecastDate: nullableDate, completedAt: instantSchema.nullable(), blockedReason: z.string().max(2000).nullable(),
   minimumSessionMinutes: z.number().int().min(15).max(480).multipleOf(15), allowedDates: z.array(dateSchema).max(366),
+  dailyPlan: dailyPlanSchema.optional(),
   checklist: checklistSchema, progressTotal: z.number().int().positive().max(10_000).nullable(),
   progressCompleted: z.number().int().min(0).max(10_000), updateDate: nullableDate,
   references: z.array(z.string().max(2000)).max(20), createdAt: instantSchema, updatedAt: instantSchema,

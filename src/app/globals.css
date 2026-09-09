@@ -1844,6 +1844,41 @@ small {
 .session-editor {
   margin: 9px 0;
 }
+.session-manager { margin-top: 14px; }
+.session-manager-heading,
+.session-manager-budget,
+.session-manager-row-title,
+.session-manager-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.session-manager-heading h4 { margin: 0; font-size: 14px; }
+.session-manager-heading > span,
+.session-manager-row-title > span { font-size: 10px; color: var(--muted); }
+.session-manager-budget { border-block: 1px solid var(--border); padding: 14px 0; margin: 16px 0; }
+.session-manager-budget strong { color: var(--mint); font-size: 14px; }
+.session-manager-budget > span { color: var(--muted); font-size: 11px; }
+.session-manager-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.session-manager-row { border-bottom: 1px solid var(--border); padding: 16px 0; margin-bottom: 12px; }
+.session-manager-row-title { margin-bottom: 12px; font-size: 11px; }
+.session-manager-row .form-grid { gap: 0 10px; }
+.session-manager-row label { font-size: 10px; }
+.session-manager-row input { min-width: 0; }
+.session-manager-row-actions { justify-content: flex-start; }
+.session-manager-row-actions .check { margin: 0 auto 0 0; }
+.session-manager-row-actions .text-button { display: inline-flex; align-items: center; gap: 5px; }
+.session-manager-history input:disabled { opacity: .65; }
+.session-manager-override { margin-top: 16px; font-size: 11px; }
+.session-manager .form-actions { flex-wrap: wrap; }
+@media (max-width: 560px) {
+  .session-manager { padding: 12px; }
+  .session-manager-row .form-grid.three { grid-template-columns: 1fr 1fr; }
+  .session-manager-row .form-grid.three > label:first-child { grid-column: 1 / -1; }
+  .session-manager .form-actions > button { flex: 1; }
+}
 .progress-status {
   margin-top: 18px;
   align-items: end;

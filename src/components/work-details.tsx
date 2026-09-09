@@ -25,6 +25,7 @@ import { CATEGORY_LABELS } from "@/lib/defaults";
 import { localDate, localDateTime, minutesBetween } from "@/lib/time";
 import { formatHours } from "@/lib/work";
 import { api, dateLabel, Field, timeLabel } from "./ui";
+import { SessionManager } from "./session-manager";
 
 function SessionEditor({
   session,
@@ -201,6 +202,7 @@ export function WorkDetails({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
+  const [managingSessions, setManagingSessions] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [checklistTitle, setChecklistTitle] = useState("");
   const [override, setOverride] = useState(false);
@@ -382,7 +384,14 @@ export function WorkDetails({
           <Clock3 size={16} />
           Work sessions <span>{sessions.length}</span>
         </h3>
-        {sessions.length ? (
+        {owner && item.status !== "completed" && item.status !== "cancelled" && !managingSessions && (
+          <button className="secondary" onClick={() => { setEditing(null); setManagingSessions(true); }}>
+            <Pencil size={14} /> Manage sessions
+          </button>
+        )}
+        {managingSessions ? (
+          <SessionManager item={item} state={state} onSaved={onState} onClose={() => setManagingSessions(false)} />
+        ) : sessions.length ? (
           sessions.map((s) => (
             <div key={s.id}>
               <button
@@ -410,7 +419,13 @@ export function WorkDetails({
               </button>
               {editing === s.id && (
                 <>
-                  <SessionEditor session={s} state={state} command={command} />
+                  {item.dailyPlan?.length ? (
+                    <button className="secondary" onClick={() => { setEditing(null); setManagingSessions(true); }}>
+                      <Pencil size={14} /> Edit daily hours and sessions
+                    </button>
+                  ) : (
+                    <SessionEditor session={s} state={state} command={command} />
+                  )}
                   <div className="form-actions">
                     <button
                       className="text-button"
@@ -456,10 +471,10 @@ export function WorkDetails({
             No executable sessions. The project remains visible on your plate.
           </p>
         )}
-        {owner && item.remainingMinutes === null && item.status !== "completed" && item.status !== "cancelled" && (
-          <p className="micro muted">To book more time, use Ask ADA with this task’s name and the session date and times. The project total can stay unknown.</p>
+        {owner && !managingSessions && item.remainingMinutes === null && item.status !== "completed" && item.status !== "cancelled" && (
+          <p className="micro muted">Use Manage sessions to add dates and times, or ask ADA. The project total can stay unknown.</p>
         )}
-        {owner && item.remainingMinutes !== null && item.status !== "waiting" && item.status !== "completed" && (
+        {owner && !managingSessions && item.remainingMinutes !== null && item.status !== "waiting" && item.status !== "completed" && item.status !== "cancelled" && (
           <button
             className="text-button"
             onClick={() => command({ type: "schedule", itemId: item.id })}

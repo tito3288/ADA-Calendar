@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { DEMO_MEMBERS } from "./fixtures";
+import { newWorkItem } from "./work";
 
 // Only the local AI ledger is real here. Interpretation and all mutation/sending
 // services are mocked; no production credentials or provider calls are used.
@@ -35,6 +36,23 @@ beforeEach(async () => {
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
 describe("selected-date API handoff", () => {
+  it("retains a daily-capacity conflict as a private clarification instead of saving a partial week", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-08T13:00:00Z"));
+    try {
+      const dailyText = "Add web work for Cedar Studio, two hours each selected day.";
+      const item = newWorkItem(DEMO_MEMBERS[0], "2026-09-11", { id: "cedar-daily", clientId: "cedar", title: "Cedar website", estimatedMinutes: 240, remainingMinutes: 240, windowEnd: "2026-09-12", dailyPlan: [{ date: "2026-09-11", minutes: 120 }, { date: "2026-09-12", minutes: 120 }] });
+      vi.mocked(interpretInput).mockResolvedValueOnce({ kind: "commands", message: "Ready to check", commands: [{ type: "create", item }] });
+      const response = await send({ text: dailyText, dateSelection: { start: "2026-09-11", end: "2026-09-12", kind: "work_window" }, operationId: "daily-conflict" });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.interpretation).toMatchObject({ kind: "clarification", commands: [], message: expect.stringContaining("2026-09-12") });
+      expect(body.replyToOperationId).toBe("daily-conflict");
+      expect(store.commit).not.toHaveBeenCalled();
+      await send({ text: "Use Friday only, two hours", replyToOperationId: "daily-conflict", operationId: "daily-reply" });
+      expect(interpretInput).toHaveBeenLastCalledWith("Use Friday only, two hours", expect.anything(), expect.anything(), expect.objectContaining({ continuation: expect.objectContaining({ turns: [expect.objectContaining({ userText: dailyText })] }) }));
+    } finally { vi.useRealTimers(); }
+  });
   it("retains dates in the private continuation, inherits them on follow-up, and clears on a terminal answer", async () => {
     const first = await send({ text, dateSelection: selected, operationId: "selection-first" });
     expect(first.status).toBe(200); expect((await first.json()).dateSelection).toEqual(selected);

@@ -9,10 +9,10 @@ import {
 
 type Interval = { start: number; end: number };
 type PlanOptions = { now?: string; operationId?: string; approveDisplacement?: boolean };
-type Allocation = { sessions: WorkSession[]; missing: number };
+type Allocation = { sessions: WorkSession[]; missing: number; missingDate?: string };
 const MINUTE = 60_000;
 const HORIZON_DAYS = 366;
-const schedulingFields = new Set(["estimatedMinutes", "remainingMinutes", "windowStart", "windowEnd", "targetDate", "deadline", "allowedDates", "minimumSessionMinutes", "priorityId", "status"]);
+const schedulingFields = new Set(["estimatedMinutes", "remainingMinutes", "windowStart", "windowEnd", "targetDate", "deadline", "allowedDates", "dailyPlan", "minimumSessionMinutes", "priorityId", "status"]);
 
 const clone = <T>(value: T): T => structuredClone(value);
 const uuid = () => crypto.randomUUID();
@@ -115,6 +115,19 @@ function target(item: WorkItem): string | null {
 }
 
 function allocation(snapshot: ScheduleSnapshot, item: WorkItem, now: string, options: { useReserve?: boolean; ignore?: Set<string>; until?: string; from?: string } = {}): Allocation {
+  if (item.dailyPlan?.length && liveItem(item)) {
+    // Resolve each quota separately. Neither a soft target nor an automatic replan
+    // may turn a daily instruction into an earliest-fit total.
+    const sessions: WorkSession[] = [];
+    for (const day of [...item.dailyPlan].sort((a, b) => a.date.localeCompare(b.date))) {
+      const onDay = snapshot.sessions.filter(s => s.workItemId === item.id && localDate(s.start, snapshot.settings.timeZone) === day.date);
+      const part = allocation({ ...snapshot, sessions: snapshot.sessions.filter(s => s.workItemId !== item.id || onDay.includes(s)) },
+        { ...item, dailyPlan: undefined, remainingMinutes: day.minutes, windowStart: day.date, deadline: day.date, allowedDates: [day.date], minimumSessionMinutes: Math.min(item.minimumSessionMinutes, day.minutes) }, now, { ...options, until: day.date });
+      sessions.push(...part.sessions);
+      if (part.missing) return { sessions, missing: part.missing, missingDate: day.date };
+    }
+    return { sessions, missing: 0 };
+  }
   const ignore = options.ignore ?? new Set<string>();
   const existing = snapshot.sessions.filter((session) => session.workItemId === item.id && !ignore.has(session.id));
   const reservedEffort = Math.ceil((item.remainingMinutes ?? 0) / snapshot.settings.slotMinutes) * snapshot.settings.slotMinutes;
@@ -158,6 +171,12 @@ function itemConflicts(snapshot: ScheduleSnapshot, item: WorkItem): ScheduleConf
   if (!isDate(item.windowStart) || [item.windowEnd, item.targetDate, item.deadline, item.updateDate, ...item.allowedDates].some((date) => date !== null && !isDate(date))) add("invalid_date", `“${item.title}” has an invalid calendar date.`);
   if (item.deadline && item.deadline < item.windowStart) add("deadline_before_start", `“${item.title}” has a firm deadline before its start date.`);
   if (item.progressCompleted < 0 || (item.progressTotal !== null && item.progressCompleted > item.progressTotal)) add("invalid_progress", `“${item.title}” has an invalid progress count.`);
+  if (item.dailyPlan?.length) {
+    if (item.dailyPlan.length > 366 || item.dailyPlan.reduce((sum, day) => sum + day.minutes, 0) > 100_000 || new Set(item.dailyPlan.map(day => day.date)).size !== item.dailyPlan.length || item.dailyPlan.some(day => !isDate(day.date) || !Number.isInteger(day.minutes) || day.minutes < 15 || day.minutes > 480 || day.minutes % snapshot.settings.slotMinutes !== 0))
+      add("invalid_daily_plan", "Daily hours need unique dates and positive 15-minute amounts.");
+    if (item.dailyPlan.some(day => day.date < item.windowStart || (item.deadline && day.date > item.deadline) || (item.allowedDates.length && !item.allowedDates.includes(day.date))))
+      add("outside_allowed_dates", "Daily hours must use the task’s allowed dates.");
+  }
   return errors;
 }
 
@@ -203,8 +222,9 @@ export function validateSchedule(snapshot: ScheduleSnapshot, now = new Date().to
       // For unknown totals, validate each day's explicit booking independently:
       // a later booking must not invalidate an earlier lunch-split remainder.
       // This session budget is never stored as an estimate of the project.
-      const focusSessions = item.remainingMinutes === null ? itemSessions.filter(entry => localDate(entry.start, snapshot.settings.timeZone) === date) : itemSessions;
-      const sessionBudget = item.remainingMinutes ?? focusSessions.reduce((sum, entry) => sum + futureMinutes(entry, now), 0);
+      const dailyBudget = item.dailyPlan?.find(day => day.date === date)?.minutes;
+      const focusSessions = item.remainingMinutes === null || dailyBudget !== undefined ? itemSessions.filter(entry => localDate(entry.start, snapshot.settings.timeZone) === date) : itemSessions;
+      const sessionBudget = dailyBudget ?? item.remainingMinutes ?? focusSessions.reduce((sum, entry) => sum + futureMinutes(entry, now), 0);
       const minimum = Math.min(item.minimumSessionMinutes, sessionBudget);
       const earlierMinutes = focusSessions.filter((entry) => instantMs(entry.end) <= part.start).reduce((sum, entry) => sum + futureMinutes(entry, now), 0);
       const smallerRemainder = focusSessions.at(-1)?.id === session.id && earlierMinutes > 0 && sessionBudget - earlierMinutes <= scheduledMinutes;
@@ -225,6 +245,15 @@ export function validateSchedule(snapshot: ScheduleSnapshot, now = new Date().to
     }
   }
   for (const block of snapshot.blocks) if (!isInstant(block.start) || !isInstant(block.end) || minutesBetween(block.start, block.end) <= 0) errors.push(conflict("invalid_block", "Unavailable time needs a valid start and end."));
+  for (const item of snapshot.items.filter(item => item.dailyPlan?.length)) {
+    const totals = new Map<string, number>();
+    for (const session of valid.filter(s => s.workItemId === item.id && futureMinutes(s, now) > 0)) {
+      const date = localDate(session.start, snapshot.settings.timeZone);
+      totals.set(date, (totals.get(date) ?? 0) + futureMinutes(session, now));
+    }
+    for (const [date, minutes] of totals) if (minutes > (item.dailyPlan!.find(day => day.date === date)?.minutes ?? 0))
+      errors.push(conflict("daily_hours", `“${item.title}” exceeds its daily hours on ${date}. Adjust that day’s plan explicitly.`, [item.id]));
+  }
   return errors;
 }
 
@@ -320,6 +349,7 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
   const urgentIds = new Set<string>();
   const replacementProtected = new Set<string>();
   const forcedDisplacedIds = new Set<string>();
+  const completedDailyIds = new Set<string>();
   const globalProtectedOverride = actor.role === "owner" && commands.some((command) => "overrideProtected" in command && command.overrideProtected && (command.type === "create" || command.type === "block" || command.type === "schedule" && command.urgent));
   const individuallyOverridden = new Set(actor.role === "owner" ? commands.flatMap((command) => {
     if (!("overrideProtected" in command) || !command.overrideProtected) return [];
@@ -348,7 +378,7 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
           item.progressCompleted = 0; item.checklist = item.checklist.map((entry) => ({ ...entry, done: false }));
         }
         item.createdAt = now; item.updatedAt = now; item.forecastDate = null;
-        if (liveItem(item) && item.remainingMinutes === null && !command.sessions?.length) {
+        if (liveItem(item) && item.remainingMinutes === null && !command.sessions?.length && !item.dailyPlan?.length) {
           errors.push(conflict("missing_sessions", "Unknown-total projects need explicit work sessions, or can be saved as waiting work.", [item.id]));
           continue;
         }
@@ -392,8 +422,15 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
       if (command.type === "complete_session") {
         const session = draft.sessions.find((entry) => entry.id === command.sessionId);
         if (!session || session.status === "cancelled") { errors.push(conflict("unknown_session", "This work session is no longer available.")); continue; }
+        if (session.status === "completed") { summaries.push("This work session is already complete."); continue; }
         const item = draft.items.find((entry) => entry.id === session.workItemId);
         if (!item) { errors.push(conflict("unknown_work", "This session’s work item is no longer available.", [session.workItemId])); continue; }
+        if (item.dailyPlan?.length) {
+          completedDailyIds.add(item.id);
+          const date = localDate(session.start, draft.settings.timeZone);
+          const released = minutesBetween(session.start, session.end);
+          item.dailyPlan = item.dailyPlan.map(day => day.date === date ? { ...day, minutes: Math.max(0, day.minutes - released) } : day).filter(day => day.minutes > 0);
+        }
         session.status = "completed";
         if (instantMs(session.start) >= instantMs(now)) session.usesReserve = false;
         else if (instantMs(session.end) > instantMs(now)) session.end = now;
@@ -426,7 +463,7 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
       } else if (command.type === "status") {
         if (["planned", "in_progress"].includes(command.status) && item.remainingMinutes === null && command.remainingMinutes === undefined
           && !draft.sessions.some(session => session.workItemId === item.id && futureMinutes(session, now) > 0)
-          && !commands.some(next => next.type === "schedule" && next.itemId === item.id && next.sessions?.length)) {
+          && !item.dailyPlan?.length && !commands.some(next => next.type === "schedule" && next.itemId === item.id && next.sessions?.length)) {
           errors.push(conflict("missing_estimate", "Resume this work with an estimate or explicitly dated work sessions.", [item.id]));
           continue;
         }
@@ -444,7 +481,7 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
         else item.completedAt = null;
         scheduleIds.add(item.id); summaries.push(`${command.status === "completed" ? "Completed" : "Changed status of"} ${item.title}${command.status === "completed" ? "." : ` to ${command.status}.`}`);
       } else if (command.type === "schedule") {
-        if (item.remainingMinutes === null && !command.sessions?.length) {
+        if (item.remainingMinutes === null && command.sessions === undefined && !item.dailyPlan?.length) {
           errors.push(conflict("missing_sessions", "The project total is unknown. Give the date, start and end for the session to book.", [item.id]));
           continue;
         }
@@ -455,7 +492,7 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
             errors.push(conflict("invalid_session", "Replacement sessions must belong to this work item and be planned.", [item.id]));
             continue;
           }
-          if (item.remainingMinutes === null) {
+          {
             // Appending explicit bookings must leave identical old sessions in
             // place, including protected sessions and a session already underway.
             const unchanged = new Set(draft.sessions.filter(old => command.sessions!.some(next => JSON.stringify(next) === JSON.stringify(old))).map(session => session.id));
@@ -466,10 +503,6 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
               draft.sessions.push(...clone(command.sessions.filter(session => !unchanged.has(session.id))));
               explicitIds.add(item.id);
             }
-          } else {
-            const cancellation = cancelFuture(draft, item.id, now, !!command.overrideProtected);
-            if (cancellation) errors.push(cancellation);
-            else { draft.sessions.push(...clone(command.sessions)); explicitIds.add(item.id); }
           }
         } else if (urgentIds.has(item.id)) {
           const ownSessions = draft.sessions.filter((session) => session.workItemId === item.id && planned(session) && instantMs(session.end) > instantMs(now));
@@ -501,8 +534,16 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
         }
         continue;
       }
+      if (item.dailyPlan?.length && item.remainingMinutes !== null && item.dailyPlan.reduce((sum, day) => sum + day.minutes, 0) > Math.ceil(item.remainingMinutes / draft.settings.slotMinutes) * draft.settings.slotMinutes) {
+        errors.push(conflict("daily_hours_total", `The daily hours for “${item.title}” exceed its remaining effort. Adjust the daily plan along with the remaining hours.`, [id]));
+        continue;
+      }
+      if (!explicitIds.has(id) && commands.some(command => command.type === "update" && command.itemId === id && command.patch.dailyPlan !== undefined)) {
+        const cancellation = cancelFuture(draft, id, now, protectedOverride(id));
+        if (cancellation) { errors.push(cancellation); continue; }
+      }
       const invalid = draft.sessions.filter((session) => session.workItemId === id && planned(session) && (
-        instantMs(session.end) <= instantMs(now) || localDate(session.start, draft.settings.timeZone) < item.windowStart ||
+        (instantMs(session.end) <= instantMs(now) && !explicitIds.has(id)) || localDate(session.start, draft.settings.timeZone) < item.windowStart ||
         (item.allowedDates.length > 0 && !item.allowedDates.includes(localDate(session.start, draft.settings.timeZone))) ||
         (item.deadline && localDate(session.end, draft.settings.timeZone) > item.deadline)
       ));
@@ -586,6 +627,9 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
     let requiresApproval = false;
     for (let cursor = 0; cursor < queue.length; cursor++) {
       const item = queue[cursor];
+      // Explicitly completing one daily booking releases it; it does not book
+      // that same effort again or silently change the project estimate.
+      if (completedDailyIds.has(item.id)) continue;
       settledIds.add(item.id);
       const incomingRequest = requester && !snapshot.items.some((existing) => existing.id === item.id);
       const desiredEnd = target(item);
@@ -594,6 +638,19 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
       const ownerApproved = actor.role === "owner" && !!options.approveDisplacement;
       const accept = (sessions: WorkSession[]) => draft.sessions.push(...sessions.map((session) => ({ ...session, protected: replacementProtected.has(item.id) || session.protected })));
       const clean = allocation(draft, item, now, { until: desiredEnd ?? undefined, useReserve });
+      if (item.dailyPlan?.length) {
+        // Daily instructions are clean-fit only: a conflict must be visible, never
+        // silently borrowed from another day or another task.
+        if (clean.missing) {
+          errors.push(conflict("daily_capacity", `“${item.title}” cannot fit its requested hours on ${clean.missingDate}. Choose a different date or adjust that day’s hours; no days have been changed.`, [item.id]));
+          break;
+        }
+        if (explicitIds.has(item.id) && clean.sessions.length) {
+          errors.push(conflict("daily_hours", "The supplied sessions do not match every daily-hour amount. Adjust the daily plan explicitly.", [item.id]));
+          break;
+        }
+        accept(clean.sessions); continue;
+      }
       if (!urgent && clean.missing === 0) { accept(clean.sessions); continue; }
       if (explicitIds.has(item.id)) {
         if (clean.missing === 0) { accept(clean.sessions); continue; }
@@ -669,6 +726,7 @@ export function planCommands(snapshot: ScheduleSnapshot, commands: WorkCommand[]
           (command.type === "schedule" && command.itemId === item.id && command.sessions !== undefined)
           || (command.type === "status" && command.itemId === item.id && ["waiting", "completed", "cancelled"].includes(command.status))
           || ((command.type === "move" || command.type === "complete_session") && command.sessionId === old.id)
+          || (command.type === "update" && command.itemId === item.id && command.patch.dailyPlan !== undefined)
           || ((command.type === "progress" || command.type === "update") && command.itemId === item.id && (command.type === "progress" ? command.remainingMinutes !== undefined : command.patch.remainingMinutes !== undefined && command.patch.remainingMinutes !== null))));
       if (lost) return fail([conflict("unknown_effort_displacement", `“${item.title}” has an unknown total. Move its booked sessions explicitly before changing time they occupy.`, [item.id])], requester ? "approval_required" : "infeasible");
     }

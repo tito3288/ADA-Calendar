@@ -18,6 +18,8 @@ export interface WorkItem {
   windowStart: string; windowEnd: string | null; targetDate: string | null; deadline: string | null;
   forecastDate: string | null; completedAt: string | null; blockedReason: string | null;
   minimumSessionMinutes: number; allowedDates: string[]; checklist: ChecklistItem[];
+  /** Exact remaining reservation budget on each date; omitted means flexible placement. */
+  dailyPlan?: { date: string; minutes: number }[];
   progressTotal: number | null; progressCompleted: number; updateDate: string | null;
   references: string[]; createdAt: string; updatedAt: string;
 }
