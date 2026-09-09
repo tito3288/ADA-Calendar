@@ -131,3 +131,21 @@ test("requesters get work windows, while viewers get no date-selection command",
   await expect(page.getByRole("button", { name: "Select dates", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Ask ADA", exact: true })).toHaveCount(0);
 });
+
+for (const width of [1440, 390]) test(`selected-date actions stay below the sticky header while scrolling at ${width}px`, async ({ page }, info) => {
+  await prepare(page, width);
+  await page.getByRole("button", { name: "Select dates", exact: true }).click();
+  await day(page, "Tuesday, September 29").locator(".day-number").click();
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  const header = page.locator(".calendar-sticky-header");
+  const toolbar = page.locator(".date-selection-toolbar");
+  const headerBounds = (await header.boundingBox())!;
+  const toolbarBounds = (await toolbar.boundingBox())!;
+  expect(headerBounds.y).toBe(0);
+  expect(toolbarBounds.y).toBeCloseTo(headerBounds.height, 0);
+  const ask = page.getByRole("button", { name: "Ask ADA about these dates", exact: true });
+  await expect(ask).toBeInViewport({ ratio: 1 });
+  await page.screenshot({ path: info.outputPath(`sticky-date-actions-${width}.png`) });
+  await ask.click();
+  await expect(dialog(page).locator(".assistant-date-context")).toContainText("Sep 29, 2026");
+});

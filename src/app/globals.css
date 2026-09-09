@@ -2037,6 +2037,9 @@ small {
   border-radius: 6px;
 }
 .date-selection-toolbar {
+  position: sticky;
+  top: var(--calendar-sticky-header-height, 0px);
+  z-index: 9;
   display: flex;
   align-items: center;
   justify-content: space-between;

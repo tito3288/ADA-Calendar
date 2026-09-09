@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Activity,
@@ -155,6 +155,22 @@ export function Workspace({ initialState }: { initialState: AppState }) {
   const [date, setDate] = useState(today);
   const [view, setView] = useState<CalendarView>("month");
   const [section, setSection] = useState<Section>("calendar");
+  const stickyHeaderRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const header = stickyHeaderRef.current;
+    const main = header?.parentElement;
+    if (!header || !main) return;
+    const updateHeight = () => {
+      main.style.setProperty(
+        "--calendar-sticky-header-height",
+        `${header.getBoundingClientRect().height}px`,
+      );
+    };
+    updateHeight();
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
   const [notesVisited, setNotesVisited] = useState(false);
   const [categories, setCategories] = useState<Category[]>([
     "web",
@@ -554,7 +570,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
             )}
           </div>
         </header>
-        <div className={section === "calendar" ? "calendar-sticky-header" : undefined}>
+        <div ref={stickyHeaderRef} className={section === "calendar" ? "calendar-sticky-header" : undefined}>
           <div className="page-heading">
             <div>
               <p className="eyebrow">A LITTLE CLARITY GOES A LONG WAY</p>
