@@ -2062,6 +2062,7 @@ small {
   gap: 10px;
 }
 .date-selection-actions label { display: grid; gap: 5px; }
+.date-selection-actions > button { min-height: 44px; }
 .is-selecting-dates .day-cell { cursor: crosshair; }
 .is-selecting-dates .day-cell.date-selected { background: #253b30; }
 .is-selecting-dates .day-cell.date-endpoint { box-shadow: inset 0 0 0 2px #b9dec9; }
@@ -2085,7 +2086,7 @@ small {
 @media (max-width: 760px) {
   .date-selection-toolbar { padding: 14px; }
   .date-selection-actions { width: 100%; }
-  .date-selection-actions .primary { width: 100%; }
+  .date-selection-actions .primary, .date-selection-actions .date-selection-book { width: 100%; }
 }
 .assistant-intro {
   text-align: center;

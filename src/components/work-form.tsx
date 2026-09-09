@@ -121,25 +121,29 @@ export function ProposalCard({
 export function WorkForm({
   state,
   date,
+  endDate = date,
   existing,
   onSaved,
   onClose,
   onFindTime,
+  onCommitted,
 }: {
   state: AppState;
   date: string;
+  endDate?: string;
   existing?: WorkItem;
   onSaved: (state: AppState) => void;
   onClose: () => void;
   onFindTime?: () => void;
+  onCommitted?: () => void;
 }) {
   const [item, setItem] = useState<WorkItem>(
     () =>
       existing ??
-      newWorkItem(state.actor, date, { clientId: state.clients[0]?.id || "" }),
+      newWorkItem(state.actor, date, { clientId: state.clients[0]?.id || "", windowEnd: endDate }),
   );
   const [exact, setExact] = useState(false);
-  const [fit, setFit] = useState<SmartFitDraft>(() => ({ startDate: date, endDate: date, hours: "1", distribution: "total" }));
+  const [fit, setFit] = useState<SmartFitDraft>(() => ({ startDate: date, endDate, hours: "1", distribution: "total" }));
   const [sessionDates, setSessionDates] = useState(date);
   const [start, setStart] = useState("09:00");
   const [end, setEnd] = useState("11:00");
@@ -247,6 +251,7 @@ export function WorkForm({
         action: request ? "request" : "commit",
       });
       onSaved(response.state);
+      onCommitted?.();
       onClose();
     } catch (e) {
       setError((e as Error).message);

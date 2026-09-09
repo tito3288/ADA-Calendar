@@ -182,6 +182,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState(false);
+  const [formDates, setFormDates] = useState<{ start: string; end: string } | null>(null);
   const [findingTime, setFindingTime] = useState(false);
   const [editing, setEditing] = useState(false);
   const [assistant, setAssistant] = useState(false);
@@ -631,6 +632,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                   <button
                     className="primary"
                     onClick={() => {
+                      setFormDates(null);
                       setEditing(false);
                       setForm(true);
                     }}
@@ -791,7 +793,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                 {selectingDates && (
                   <div className="date-selection-toolbar">
                     <div aria-live="polite">
-                      <p className="eyebrow">DATES FOR ASK ADA</p>
+                      <p className="eyebrow">SELECTED DATES</p>
                       <strong>
                         {dateSelection
                           ? selectedDatesLabel(dateSelection)
@@ -799,14 +801,14 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                       </strong>
                       <p className="micro muted">
                         {selectionAnchor
-                          ? "Choose a second day for a range, or Ask ADA about this day."
+                          ? "Choose a second day for a range, or add work or ask ADA about this day."
                           : dateSelection
                             ? "Your range is selected. Another click starts a new range."
                             : "Click once for one day, then another day for a range. You can move between months."}
                       </p>
                       <p className="micro muted">
                         {dateSelection?.kind === "project_span"
-                          ? "Timeline only. No hours are reserved."
+                          ? "Timeline only. No hours are reserved. Use Ask ADA, or choose Work window to book hours manually."
                           : "Schedule within these dates, not on every day. Capacity checks still apply."}
                       </p>
                     </div>
@@ -841,6 +843,20 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                         }}
                       >
                         Cancel selection
+                      </button>
+                      <button
+                        className="secondary date-selection-book"
+                        disabled={!dateSelection || dateSelection.kind !== "work_window"}
+                        onClick={() => {
+                          if (!dateSelection || dateSelection.kind !== "work_window") return;
+                          setFormDates({ start: dateSelection.start, end: dateSelection.end });
+                          setSelectedId(null);
+                          setEditing(false);
+                          setForm(true);
+                        }}
+                      >
+                        <Plus size={16} />
+                        {owner ? "Add work on these dates" : "Request work on these dates"}
                       </button>
                       <button
                         className="primary"
@@ -1293,9 +1309,18 @@ export function Workspace({ initialState }: { initialState: AppState }) {
         <WorkForm
           key={`${form}-${editing}-${selectedId}`}
           state={state}
-          date={date}
+          date={!editing && formDates ? formDates.start : date}
+          endDate={!editing ? formDates?.end : undefined}
           existing={editing ? selected : undefined}
           onSaved={update}
+          onCommitted={() => {
+            if (!editing && formDates) {
+              setSelectingDates(false);
+              setDateSelection(null);
+              setSelectionAnchor(null);
+              setFormDates(null);
+            }
+          }}
           onClose={() => setForm(false)}
           onFindTime={editing ? () => { setForm(false); setFindingTime(true); } : undefined}
         />
