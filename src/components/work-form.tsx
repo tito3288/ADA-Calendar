@@ -7,7 +7,7 @@ import type {
   WorkCommand,
   WorkItem,
 } from "@/lib/types";
-import { localDate, localDateTime, minutesBetween } from "@/lib/time";
+import { isDate, localDate, localDateTime, minutesBetween } from "@/lib/time";
 import { defaultWorkPriority, newWorkItem, formatHours } from "@/lib/work";
 import { CATEGORY_LABELS } from "@/lib/defaults";
 import { api, ApiError, Field, dateLabel, timeLabel } from "./ui";
@@ -32,6 +32,14 @@ export function ProposalCard({
     ["planned", "in_progress"].includes(item.status) &&
     state.items.some(previous => previous.id === item.id && previous.status === "waiting"),
   );
+  const changedWorkDates = proposal.items.flatMap(item => {
+    const before = state.items.find(previous => previous.id === item.id);
+    return before && JSON.stringify([...before.allowedDates].sort()) !== JSON.stringify([...item.allowedDates].sort())
+      ? [{ before, after: item }] : [];
+  });
+  const describeWorkDates = (dates: string[]) => dates.length
+    ? [...dates].sort().map(date => dateLabel(date, { month: "short", day: "numeric", year: "numeric" })).join(", ")
+    : "Any working day within the earliest start and firm deadline";
   const visibleSessions = proposal.sessions.filter(session => proposal.affectedItemIds.includes(session.workItemId) && session.status === "planned"
     && (!smartFit || !state.sessions.some(existing => existing.id === session.id)));
   const underallocated = state.items.filter(
@@ -73,6 +81,13 @@ export function ProposalCard({
           <li key={`c${i}`}>{c.message}</li>
         ))}
       </ul>
+      {ready && changedWorkDates.length > 0 && <div className="proposal-date-changes">
+        {changedWorkDates.map(({ before, after }) => <div key={after.id}>
+          <strong>Allowed work dates · {after.title}</strong>
+          <p>Before: {describeWorkDates(before.allowedDates)}</p>
+          <p>After: {describeWorkDates(after.allowedDates)}</p>
+        </div>)}
+      </div>}
       {ready && resumedItems.length > 0 && <div className="proposal-status-changes">
         {resumedItems.map(item => <p key={item.id}>
           <strong>{item.title}: Waiting → {item.status === "planned" ? "Planned" : "In progress"}.</strong>{" "}
@@ -154,6 +169,8 @@ export function WorkForm({
       newWorkItem(state.actor, date, { clientId: state.clients[0]?.id || "", windowEnd: endDate, priorityId: defaultWorkPriority("web", state.priorities) }),
   );
   const [priorityChosen, setPriorityChosen] = useState(Boolean(existing));
+  const [restrictWorkDates, setRestrictWorkDates] = useState(Boolean(existing?.allowedDates.length));
+  const [allowedWorkDates, setAllowedWorkDates] = useState(() => [...(existing?.allowedDates ?? [])]);
   const [exact, setExact] = useState(false);
   const [fit, setFit] = useState<SmartFitDraft>(() => ({ startDate: date, endDate, hours: "1", distribution: "total" }));
   const [sessionDates, setSessionDates] = useState(date);
@@ -166,6 +183,8 @@ export function WorkForm({
   const [error, setError] = useState("");
   const [operationId, setOperationId] = useState(() => crypto.randomUUID());
   const allowUnknownEffort = existing?.remainingMinutes === null;
+  const allowedDates = restrictWorkDates ? [...new Set(allowedWorkDates)].sort() : [];
+  const datesChanged = Boolean(existing && JSON.stringify(allowedDates) !== JSON.stringify([...new Set(existing.allowedDates)].sort()));
   function patch(p: Partial<WorkItem>) {
     setItem({ ...item, ...p });
     setProposal(null);
@@ -177,11 +196,19 @@ export function WorkForm({
     try { total = smartFitTotal(smartFitRequest(next), state.settings); } catch { /* Incomplete draft. */ }
     patch({ windowStart: next.startDate, windowEnd: next.endDate, estimatedMinutes: total, remainingMinutes: total });
   }
+  function changeAllowedWorkDates(dates: string[]) {
+    setAllowedWorkDates(dates);
+    setProposal(null);
+    setError("");
+    setOperationId(crypto.randomUUID());
+  }
   async function preview(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError("");
     try {
+      if (existing && restrictWorkDates && (!allowedDates.length || allowedDates.some(date => !isDate(date))))
+        throw new Error("Choose a valid date for every allowed work date, or uncheck Limit work to selected dates.");
       const commands: WorkCommand[] = existing
         ? [
             {
@@ -204,8 +231,13 @@ export function WorkForm({
                 progressTotal: item.progressTotal,
                 updateDate: item.updateDate,
                 references: item.references,
+                ...(datesChanged ? { allowedDates } : {}),
               },
             },
+            // A date-permission edit must not auto-fill unscheduled effort or
+            // move existing bookings. Revalidate the exact saved sessions.
+            ...(datesChanged && ["planned", "in_progress"].includes(existing.status) ? [{ type: "schedule" as const, itemId: item.id,
+              sessions: state.sessions.filter(session => session.workItemId === item.id && session.status === "planned") }] : []),
           ]
         : [
             {
@@ -279,7 +311,7 @@ export function WorkForm({
       {existing && onFindTime && !["completed", "cancelled"].includes(existing.status) && <div className="inset">
         <p className="micro muted">Just adding hours? Find an opening without changing the project details.</p>
         <button type="button" className="secondary" disabled={busy} onClick={() => {
-          if (JSON.stringify(item) !== JSON.stringify(existing) && !window.confirm("Discard these unsaved project edits and find a time instead?")) return;
+          if ((datesChanged || JSON.stringify(item) !== JSON.stringify(existing)) && !window.confirm("Discard these unsaved project edits and find a time instead?")) return;
           onFindTime();
         }}><Clock3 size={16} /> Find a time for me</button>
       </div>}
@@ -433,6 +465,28 @@ export function WorkForm({
         </Field>
       </div>
       </>}
+      {existing && state.actor.role === "owner" && <fieldset className="inset allowed-work-dates" aria-label="Allowed work dates">
+        <legend>Allowed work dates</legend>
+        <p className="micro muted">These dates control where sessions can be booked or moved. To move to another day, add it here first. Keep dates that still have sessions. The project span only controls the faded ribbon.</p>
+        <label className="check">
+          <input type="checkbox" checked={restrictWorkDates} onChange={event => {
+            setRestrictWorkDates(event.target.checked);
+            const bookedDates = [...new Set(state.sessions.filter(session => session.workItemId === item.id && session.status === "planned").map(session => localDate(session.start, state.settings.timeZone)))].sort();
+            changeAllowedWorkDates(allowedWorkDates.length ? allowedWorkDates : bookedDates.length ? bookedDates : [item.windowStart]);
+          }} />
+          Limit work to selected dates
+        </label>
+        {restrictWorkDates ? <>
+          {allowedWorkDates.map((date, index) => <div className="allowed-work-date-row" key={index}>
+            <Field label={`Allowed work date ${index + 1}`}>
+              <input type="date" required value={date} onChange={event => changeAllowedWorkDates(allowedWorkDates.map((value, row) => row === index ? event.target.value : value))} />
+            </Field>
+            <button type="button" className="text-button" aria-label={`Remove allowed work date ${index + 1}`} onClick={() => changeAllowedWorkDates(allowedWorkDates.filter((_, row) => row !== index))}>Remove</button>
+          </div>)}
+          <button type="button" className="secondary" disabled={allowedWorkDates.length >= 366} onClick={() => changeAllowedWorkDates([...allowedWorkDates, ""])}>Add allowed work date</button>
+        </> : <p className="micro muted">Any working day is allowed after Earliest start and before any firm deadline.</p>}
+        <p className="micro muted">Changing allowed dates keeps the currently booked sessions in place. Review and confirm below, then retry your move.</p>
+      </fieldset>}
       <div className="form-grid">
         <Field label="Target finish (optional)">
           <input

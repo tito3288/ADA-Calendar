@@ -629,7 +629,18 @@ function planBookingEdit(snapshot: ScheduleSnapshot, commands: WorkCommand[], no
       if(daySessions.length!==selected.length||daySessions.some(session=>!command.sessionIds.includes(session.id)))
         return fail([conflict("booking_group_changed","This project's bookings on that day changed. Refresh the calendar and move the complete booked segment again.",[item.id])]);
       if(command.date===sourceDate)return {...result,summary:["These bookings are already on that day. Nothing changed."]};
-      if(!allowed(command.date))return fail([conflict("outside_allowed_dates","The destination is outside the project's allowed work dates, earliest start, or firm deadline. Adjust the project window separately; it has not changed.",[item.id])]);
+      if(!allowed(command.date)){
+        const label=(date:string)=>new Intl.DateTimeFormat("en-US",{month:"short",day:"numeric",year:"numeric",timeZone:"UTC"}).format(new Date(`${date}T12:00:00Z`));
+        let message:string;
+        if(command.date<item.windowStart)message=`${label(command.date)} is before this project's earliest start, ${label(item.windowStart)}. Open Edit work to change Earliest start if the work can begin sooner. Nothing moved.`;
+        else if(item.deadline&&command.date>item.deadline)message=`${label(command.date)} is after this project's firm deadline, ${label(item.deadline)}. Changing that deadline requires Bryan's explicit override. Nothing moved.`;
+        else{
+          const dates=[...new Set(item.allowedDates)].sort();
+          const shown=dates.slice(0,6).map(label).join("; ");
+          message=`${label(command.date)} is not an allowed work date for this project. Allowed work dates: ${shown}${dates.length>6?`; and ${dates.length-6} more`:""}. Open Edit work and add the destination under Allowed work dates, then try the move again. The project span is only a display ribbon; extending it alone will not change this restriction. Nothing moved.`;
+        }
+        return fail([conflict("outside_allowed_dates",message,[item.id])]);
+      }
       if(command.date<localDate(now,draft.settings.timeZone))return fail([conflict("historical_session","Work cannot be moved into a past day.",[item.id])]);
       const placements=placeBookingGroup(draft,selected,command.date,now);
       if(!placements)return fail([conflict("booking_capacity","All of these bookings cannot fit on that day as whole sessions without changing other work. Choose another day; no bookings moved.",[item.id])]);

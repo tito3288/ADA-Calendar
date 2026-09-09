@@ -271,8 +271,7 @@ export function SessionManager({
       ) : null}
       {item.allowedDates.length > 0 && (
         <p className="micro muted">
-          These sessions must stay within this project’s allowed work dates. ADA
-          will identify any date that needs a different work window.
+          Allowed work dates: {[...item.allowedDates].sort().map(date => dateLabel(date)).join(", ")}. To use another day, add it under Allowed work dates in Edit work first.
         </p>
       )}
       <fieldset disabled={busy} className="session-manager-fields">

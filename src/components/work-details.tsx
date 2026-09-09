@@ -328,6 +328,10 @@ export function WorkDetails({
           <dt>Firm deadline</dt>
           <dd>{item.deadline ? dateLabel(item.deadline) : "None"}</dd>
         </div>
+        {item.allowedDates.length > 0 && <div>
+          <dt>Allowed work dates</dt>
+          <dd>{[...item.allowedDates].sort().map(date => dateLabel(date)).join(", ")}</dd>
+        </div>}
         {item.updateDate && (
           <div>
             <dt>Client update checkpoint</dt>

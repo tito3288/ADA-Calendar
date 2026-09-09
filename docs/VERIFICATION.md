@@ -2,6 +2,12 @@
 
 This records evidence for the eight phases in [the approved blueprint](BLUEPRINT.md), not a claim that hosted services have been deployed. Sample clients, the demo parser, and captured notifications are deliberately isolated from live work.
 
+## Allowed work dates and blocked moves — September 9, 2026
+
+- Work details and session management expose the saved allowed dates separately from the faded span. Edit work lets the owner add/remove dates or explicitly remove the restriction; preview discloses before/after permissions. Changed dates preserve exact active-project sessions, including partial/unknown effort, and do not resume waiting work. Unchanged date permissions are omitted from updates. Month move alerts identify the actual earliest-start, deadline or allowed-date constraint.
+- Lint, generated-route TypeScript checks and **1,115 unit/server tests** passed. **31 distinct browser scenarios** passed across the focused date-editor run and existing calendar-move/session-management/IT-priority regressions. Desktop/mobile tests reproduce the rejected move, add the destination without moving current bookings, then confirm a separate move. Coverage includes cancel, display-span-only edits, explicit restriction removal, waiting work, requester read-only access, protected time, unknown/partial estimates, saved quotas and insufficient destination capacity. Desktop/mobile screenshots were inspected.
+- The final source passed `npm run build -- --webpack` on Node 22.22.2. Browser fixtures were isolated and no live calendar mutation or real mail send occurred. Railway deployment remains separate from this local verification.
+
 ## IT priority defaults — September 9, 2026
 
 - New owner IT work defaults to Urgent in the manual form and ADA. Explicit choices override the default, category changes preserve a manually selected priority, and editing existing work preserves its saved priority. Requester IT suggestions default to Urgent while effective priority remains Normal under the existing approval rules. The category default grants no scheduling override.

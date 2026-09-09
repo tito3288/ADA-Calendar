@@ -2031,6 +2031,20 @@ small {
   margin: 0;
   text-align: right;
 }
+.allowed-work-dates {
+  min-width: 0;
+  margin: 16px 0;
+}
+.allowed-work-dates legend {
+  font-size: 13px;
+  font-weight: 600;
+}
+.allowed-work-date-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
 .detail-actions {
   display: flex;
   gap: 10px;
