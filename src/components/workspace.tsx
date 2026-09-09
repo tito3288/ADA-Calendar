@@ -554,148 +554,150 @@ export function Workspace({ initialState }: { initialState: AppState }) {
             )}
           </div>
         </header>
-        <div className="page-heading">
-          <div>
-            <p className="eyebrow">A LITTLE CLARITY GOES A LONG WAY</p>
-            <h1>
-              {section === "calendar"
-                ? owner
-                  ? "Your plate, at a glance."
-                  : "Bryan’s plate, at a glance."
-                : section === "work"
-                  ? "Everything on the plate."
-                  : section === "requests"
-                    ? "Make room, thoughtfully."
-                    : section === "notes"
-                      ? "A place for your notes."
-                      : "Everyone in the loop."}
-            </h1>
-            <p className="muted">
-              {section === "calendar"
-                ? "The big picture. The focus time. Room for the unexpected."
-                : section === "work"
-                  ? "Projects, batches, and the work that happens in between."
-                  : section === "requests"
-                    ? "Clean-fit work books directly. Changing commitments needs Bryan’s say."
-                    : section === "notes"
-                      ? "Lists, ideas, and details to come back to. Each note stays separate."
-                      : "Committed changes, client updates, and the emails that keep everyone informed."}
-            </p>
+        <div className={section === "calendar" ? "calendar-sticky-header" : undefined}>
+          <div className="page-heading">
+            <div>
+              <p className="eyebrow">A LITTLE CLARITY GOES A LONG WAY</p>
+              <h1>
+                {section === "calendar"
+                  ? owner
+                    ? "Your plate, at a glance."
+                    : "Bryan’s plate, at a glance."
+                  : section === "work"
+                    ? "Everything on the plate."
+                    : section === "requests"
+                      ? "Make room, thoughtfully."
+                      : section === "notes"
+                        ? "A place for your notes."
+                        : "Everyone in the loop."}
+              </h1>
+              <p className="muted">
+                {section === "calendar"
+                  ? "The big picture. The focus time. Room for the unexpected."
+                  : section === "work"
+                    ? "Projects, batches, and the work that happens in between."
+                    : section === "requests"
+                      ? "Clean-fit work books directly. Changing commitments needs Bryan’s say."
+                      : section === "notes"
+                        ? "Lists, ideas, and details to come back to. Each note stays separate."
+                        : "Committed changes, client updates, and the emails that keep everyone informed."}
+              </p>
+            </div>
+            <div className="heading-actions">
+              {state.actor.role !== "viewer" && section !== "notes" && (
+                <>
+                  <button
+                    className="secondary"
+                    disabled={assistantDraft.busy}
+                    onClick={() => {
+                      if (
+                        assistantDraft.text.trim() ||
+                        assistantDraft.replyToOperationId ||
+                        assistantDraft.proposal
+                      )
+                        setConfirmNewSelection(true);
+                      else beginDateSelection();
+                    }}
+                  >
+                    <CalendarDays size={16} />
+                    Select dates
+                  </button>
+                  <button
+                    className="secondary assistant-trigger"
+                    onClick={() => {
+                      setSelectingDates(false);
+                      setAssistant(true);
+                    }}
+                  >
+                    <Sparkles size={16} />
+                    Ask ADA
+                  </button>
+                  <button
+                    className="primary"
+                    onClick={() => {
+                      setEditing(false);
+                      setForm(true);
+                    }}
+                  >
+                    <Plus size={17} />
+                    {owner ? "Add work" : "Request work"}
+                  </button>
+                </>
+              )}
+            </div>
           </div>
-          <div className="heading-actions">
-            {state.actor.role !== "viewer" && section !== "notes" && (
-              <>
-                <button
-                  className="secondary"
-                  disabled={assistantDraft.busy}
-                  onClick={() => {
-                    if (
-                      assistantDraft.text.trim() ||
-                      assistantDraft.replyToOperationId ||
-                      assistantDraft.proposal
-                    )
-                      setConfirmNewSelection(true);
-                    else beginDateSelection();
-                  }}
-                >
-                  <CalendarDays size={16} />
-                  Select dates
+          {owner &&
+            section !== "notes" &&
+            state.aiUsageUsd >= state.settings.aiWarningUsd && (
+              <div className="budget-note" role="status">
+                <Sparkles size={16} />
+                <span>
+                  AI allowance: ${state.aiUsageUsd.toFixed(2)} of $
+                  {state.settings.aiLimitUsd.toFixed(2)} this month (including
+                  reserved calls).{" "}
+                  {state.aiUsageUsd >= state.settings.aiLimitUsd
+                    ? "New AI calls are paused."
+                    : "Approaching your pause threshold."}{" "}
+                  Manual scheduling remains available.
+                </span>
+                <button className="text-button" onClick={() => setSettings(true)}>
+                  Manage allowance
                 </button>
-                <button
-                  className="secondary assistant-trigger"
-                  onClick={() => {
-                    setSelectingDates(false);
-                    setAssistant(true);
-                  }}
-                >
-                  <Sparkles size={16} />
-                  Ask ADA
-                </button>
-                <button
-                  className="primary"
-                  onClick={() => {
-                    setEditing(false);
-                    setForm(true);
-                  }}
-                >
-                  <Plus size={17} />
-                  {owner ? "Add work" : "Request work"}
-                </button>
-              </>
+              </div>
             )}
-          </div>
-        </div>
-        {owner &&
-          section !== "notes" &&
-          state.aiUsageUsd >= state.settings.aiWarningUsd && (
-            <div className="budget-note" role="status">
-              <Sparkles size={16} />
-              <span>
-                AI allowance: ${state.aiUsageUsd.toFixed(2)} of $
-                {state.settings.aiLimitUsd.toFixed(2)} this month (including
-                reserved calls).{" "}
-                {state.aiUsageUsd >= state.settings.aiLimitUsd
-                  ? "New AI calls are paused."
-                  : "Approaching your pause threshold."}{" "}
-                Manual scheduling remains available.
-              </span>
-              <button className="text-button" onClick={() => setSettings(true)}>
-                Manage allowance
+          {section !== "notes" && (
+            <div className="summary-strip">
+              <div>
+                <span className="summary-icon">
+                  <Layers3 size={17} />
+                </span>
+                <span>
+                  <strong>{active.length}</strong>active projects
+                </span>
+              </div>
+              <div>
+                <span className="summary-icon">
+                  <Clock3 size={17} />
+                </span>
+                <span>
+                  <strong>
+                    {formatHours(weekPlanned)}
+                    <small> / {formatHours(weekCapacity)}</small>
+                  </strong>
+                  planned this week
+                </span>
+                <div className="tiny-capacity">
+                  <i
+                    style={{
+                      width: `${Math.min(100, (weekPlanned / (weekCapacity || 1)) * 100)}%`,
+                    }}
+                  />
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setSection("work");
+                  setSearch("");
+                }}
+              >
+                <span className="summary-icon">
+                  <ArrowDownLeft size={17} />
+                </span>
+                <span>
+                  <strong>{waiting.length}</strong>waiting on input
+                </span>
+              </button>
+              <button onClick={() => setSection("requests")}>
+                <span className="summary-icon">
+                  <Inbox size={17} />
+                </span>
+                <span>
+                  <strong>{pending.length}</strong>pending requests
+                </span>
               </button>
             </div>
           )}
-        {section !== "notes" && (
-          <div className="summary-strip">
-            <div>
-              <span className="summary-icon">
-                <Layers3 size={17} />
-              </span>
-              <span>
-                <strong>{active.length}</strong>active projects
-              </span>
-            </div>
-            <div>
-              <span className="summary-icon">
-                <Clock3 size={17} />
-              </span>
-              <span>
-                <strong>
-                  {formatHours(weekPlanned)}
-                  <small> / {formatHours(weekCapacity)}</small>
-                </strong>
-                planned this week
-              </span>
-              <div className="tiny-capacity">
-                <i
-                  style={{
-                    width: `${Math.min(100, (weekPlanned / (weekCapacity || 1)) * 100)}%`,
-                  }}
-                />
-              </div>
-            </div>
-            <button
-              onClick={() => {
-                setSection("work");
-                setSearch("");
-              }}
-            >
-              <span className="summary-icon">
-                <ArrowDownLeft size={17} />
-              </span>
-              <span>
-                <strong>{waiting.length}</strong>waiting on input
-              </span>
-            </button>
-            <button onClick={() => setSection("requests")}>
-              <span className="summary-icon">
-                <Inbox size={17} />
-              </span>
-              <span>
-                <strong>{pending.length}</strong>pending requests
-              </span>
-            </button>
-          </div>
-        )}
+        </div>
         {owner && notesVisited && (
           <div className="notes-section" hidden={section !== "notes"}>
             <NotesPanel

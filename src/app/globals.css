@@ -620,6 +620,13 @@ small {
   font-size: 9px;
   background: #1d2420;
 }
+.calendar-sticky-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flow-root;
+  background: var(--bg);
+}
 .page-heading {
   padding: 30px 32px 24px;
   display: flex;
@@ -806,6 +813,22 @@ small {
   align-items: flex-start;
   padding: var(--day-padding-y) var(--day-padding-x);
   text-align: left;
+}
+/* Dim each past column, including its portion of multi-day ribbons.
+   The visual veil never intercepts clicks or changes calendar state. */
+.day-cell.is-past::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: var(--bg);
+  opacity: 0.35;
+  pointer-events: none;
+}
+.day-cell.is-past:hover::after,
+.day-cell.is-past:focus-visible::after,
+.day-cell.is-past.date-selected::after {
+  opacity: 0.15;
 }
 .day-header {
   display: flex;
