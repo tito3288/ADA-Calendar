@@ -2,6 +2,12 @@
 
 This records evidence for the eight phases in [the approved blueprint](BLUEPRINT.md), not a claim that hosted services have been deployed. Sample clients, the demo parser, and captured notifications are deliberately isolated from live work.
 
+## IT priority defaults — September 9, 2026
+
+- New owner IT work defaults to Urgent in the manual form and ADA. Explicit choices override the default, category changes preserve a manually selected priority, and editing existing work preserves its saved priority. Requester IT suggestions default to Urgent while effective priority remains Normal under the existing approval rules. The category default grants no scheduling override.
+- Lint, generated-route TypeScript checks, **1,105 unit/server tests**, and **24 API/browser scenarios** passed. Coverage includes owner desktop/mobile save/reopen of Urgent and explicit Normal, requester clean fits, existing-work category edits, model-inferred priorities, and explicit non-urgent instructions. Desktop/mobile priority screenshots were inspected. Tests use fictional workspaces and captured mail; no live work or real sends were changed.
+- The final source passed `npm run build -- --webpack` on Node 22.22.2. This is local verification; Railway deployment is separate.
+
 ## Waiting project bookings — September 9, 2026
 
 - All session-manager entry points now start with the same visible booking authorization. Switching from exact-session editing to smart fit no longer accidentally requests hours without resuming waiting work. The owner can still uncheck that choice. The preview discloses Waiting → Planned and clearing the waiting reason; unknown effort stays unknown. Smart-fit totals reflect the chosen hours rather than unused exact-session drafts.

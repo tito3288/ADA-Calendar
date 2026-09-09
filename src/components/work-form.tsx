@@ -8,7 +8,7 @@ import type {
   WorkItem,
 } from "@/lib/types";
 import { localDate, localDateTime, minutesBetween } from "@/lib/time";
-import { newWorkItem, formatHours } from "@/lib/work";
+import { defaultWorkPriority, newWorkItem, formatHours } from "@/lib/work";
 import { CATEGORY_LABELS } from "@/lib/defaults";
 import { api, ApiError, Field, dateLabel, timeLabel } from "./ui";
 import { SchedulingMode, SmartFitFields } from "./smart-fit-fields";
@@ -151,8 +151,9 @@ export function WorkForm({
   const [item, setItem] = useState<WorkItem>(
     () =>
       existing ??
-      newWorkItem(state.actor, date, { clientId: state.clients[0]?.id || "", windowEnd: endDate }),
+      newWorkItem(state.actor, date, { clientId: state.clients[0]?.id || "", windowEnd: endDate, priorityId: defaultWorkPriority("web", state.priorities) }),
   );
+  const [priorityChosen, setPriorityChosen] = useState(Boolean(existing));
   const [exact, setExact] = useState(false);
   const [fit, setFit] = useState<SmartFitDraft>(() => ({ startDate: date, endDate, hours: "1", distribution: "total" }));
   const [sessionDates, setSessionDates] = useState(date);
@@ -303,10 +304,13 @@ export function WorkForm({
             }
             onChange={(e) => {
               const value = e.target.value;
+              const category = value.startsWith("web") ? "web" : value as WorkItem["category"];
               patch({
-                category: value.startsWith("web")
-                  ? "web"
-                  : (value as WorkItem["category"]),
+                category,
+                ...(!priorityChosen ? state.actor.role === "owner"
+                  ? { priorityId: defaultWorkPriority(category, state.priorities) }
+                  : { requestedPriorityId: defaultWorkPriority(category, state.priorities) }
+                  : {}),
                 webKind: value.startsWith("web")
                   ? (value.split("-")[1] as "edit" | "build")
                   : null,
@@ -352,13 +356,14 @@ export function WorkForm({
                 ? item.priorityId
                 : item.requestedPriorityId || "normal"
             }
-            onChange={(e) =>
+            onChange={(e) => {
+              setPriorityChosen(true);
               patch(
                 state.actor.role === "owner"
                   ? { priorityId: e.target.value }
                   : { requestedPriorityId: e.target.value },
-              )
-            }
+              );
+            }}
           >
             {state.priorities.map((p) => (
               <option key={p.id} value={p.id}>
