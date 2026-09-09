@@ -28,6 +28,10 @@ export function ProposalCard({
   const ready = proposal.status === "ready" && !proposal.requiresApproval;
   const requester = state.actor.role === "requester";
   const smartFit = proposal.commands.some(command => command.type === "fit" || (command.type === "create" && command.smartFit));
+  const resumedItems = proposal.items.filter(item =>
+    ["planned", "in_progress"].includes(item.status) &&
+    state.items.some(previous => previous.id === item.id && previous.status === "waiting"),
+  );
   const visibleSessions = proposal.sessions.filter(session => proposal.affectedItemIds.includes(session.workItemId) && session.status === "planned"
     && (!smartFit || !state.sessions.some(existing => existing.id === session.id)));
   const underallocated = state.items.filter(
@@ -69,6 +73,13 @@ export function ProposalCard({
           <li key={`c${i}`}>{c.message}</li>
         ))}
       </ul>
+      {ready && resumedItems.length > 0 && <div className="proposal-status-changes">
+        {resumedItems.map(item => <p key={item.id}>
+          <strong>{item.title}: Waiting → {item.status === "planned" ? "Planned" : "In progress"}.</strong>{" "}
+          Confirming clears the waiting reason.
+          {item.remainingMinutes === null ? " The project total stays unknown; more hours can be added later." : ""}
+        </p>)}
+      </div>}
       <div className="proposal-sessions">
         {visibleSessions
           .slice(0, smartFit ? undefined : 15)

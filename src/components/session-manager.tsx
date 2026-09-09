@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { LockKeyhole, Plus, Scissors, Trash2 } from "lucide-react";
 import type { AppState, ScheduleProposal, WorkCommand, WorkItem, WorkSession } from "@/lib/types";
-import { smartFitRequest, type SmartFitDraft } from "@/lib/smart-fit";
+import { smartFitRequest, smartFitTotal, type SmartFitDraft } from "@/lib/smart-fit";
 import {
   addDays,
   addMinutes,
@@ -72,7 +72,7 @@ export function SessionManager({
   );
   const [overrideProtected, setOverrideProtected] = useState(false);
   const [requiresProtectedOverride, setRequiresProtectedOverride] = useState(false);
-  const [resume, setResume] = useState(initialMode === "smart" && item.status === "waiting");
+  const [resume, setResume] = useState(item.status === "waiting");
   const [proposal, setProposal] = useState<ScheduleProposal | null>(null);
   const [operationId, setOperationId] = useState(() => crypto.randomUUID());
   const [busy, setBusy] = useState(false);
@@ -100,6 +100,12 @@ export function SessionManager({
     } catch {
       completeRows = false;
     }
+  }
+  let requestedMinutes: number | null = null;
+  if (mode === "smart") {
+    try {
+      requestedMinutes = smartFitTotal(smartFitRequest(fit), state.settings);
+    } catch { /* Incomplete drafts have no booking total yet. */ }
   }
   function invalidate() {
     setProposal(null);
@@ -248,7 +254,9 @@ export function SessionManager({
       <SchedulingMode mode={mode} disabled={busy} onChange={next => { setMode(next); invalidate(); }} />
       <div className="session-manager-budget" aria-live="polite">
         <strong>
-          {completeRows ? formatHours(reserved) : "—"} in future sessions
+          {mode === "smart"
+            ? `${requestedMinutes === null ? "—" : formatHours(requestedMinutes)} to book`
+            : `${completeRows ? formatHours(reserved) : "—"} in future sessions`}
         </strong>
         <span>
           {mode === "exact" && updateRemaining ? `${remainingHours || "—"}h remaining effort after this edit` : item.remainingMinutes === null
@@ -388,17 +396,23 @@ export function SessionManager({
         )}
         </>}
         {item.status === "waiting" && (
-          <label className="check session-manager-override">
-            <input
-              type="checkbox"
-              checked={resume}
-              onChange={(e) => {
-                setResume(e.target.checked);
-                invalidate();
-              }}
-            />
-            Resume this waiting project when these sessions are booked.
-          </label>
+          <div>
+            <label className="check session-manager-override">
+              <input
+                type="checkbox"
+                checked={resume}
+                onChange={(e) => {
+                  setResume(e.target.checked);
+                  invalidate();
+                }}
+              />
+              Book these sessions and change status from Waiting to Planned.
+            </label>
+            <p className="micro muted">
+              Waiting means no booked work. Booking sessions makes the project Planned and clears its waiting reason. The project stays visible for its full span; only the sessions you choose reserve hours.
+              {item.remainingMinutes === null && !(mode === "exact" && updateRemaining) ? " The project total stays unknown, and you can add more hours later." : ""}
+            </p>
+          </div>
         )}
       </fieldset>
       {error && (

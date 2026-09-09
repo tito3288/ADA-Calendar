@@ -2,6 +2,12 @@
 
 This records evidence for the eight phases in [the approved blueprint](BLUEPRINT.md), not a claim that hosted services have been deployed. Sample clients, the demo parser, and captured notifications are deliberately isolated from live work.
 
+## Waiting project bookings — September 9, 2026
+
+- All session-manager entry points now start with the same visible booking authorization. Switching from exact-session editing to smart fit no longer accidentally requests hours without resuming waiting work. The owner can still uncheck that choice. The preview discloses Waiting → Planned and clearing the waiting reason; unknown effort stays unknown. Smart-fit totals reflect the chosen hours rather than unused exact-session drafts.
+- Lint, generated-route TypeScript checks, **1,072 unit/server tests**, and **20 focused Playwright scenarios** passed. Desktop/mobile regressions cover three hours on Friday September 11 around four existing booked hours, both exact-entry buttons, cancellation, explicit opt-out across mode switches, preserved unknown effort/project span/settings/other bookings, and preview-before-confirmation. Dialog accessibility scans passed. Fixtures and captured messages remain isolated from live work.
+- `npm run build -- --webpack` passed on Node 22.22.2. The default Turbopack build encountered the local CSS-worker port-binding `EPERM`, including an escalated retry. No Railway deployment or real calendar booking was performed by this verification.
+
 ## Password authentication — September 7, 2026
 
 - Bryan requested email/password sign-in before Resend onboarding. Normal sign-in no longer sends a magic link; access remains invite-only. Initial setup and recovery use explicitly verified, active-member sessions. Account creation and membership are completed before invitation delivery.
