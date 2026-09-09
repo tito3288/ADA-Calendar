@@ -1,7 +1,7 @@
 "use client";
 
 import { Plus, Trash2 } from "lucide-react";
-import { addDays, localDate, nextWorkDate } from "@/lib/time";
+import { addDays, localDate } from "@/lib/time";
 import {
   parseDayHours,
   usableWorkDate,
@@ -39,13 +39,13 @@ export function DayHoursFields({
       .sort()
       .at(-1);
     const now = new Date().toISOString();
-    const date = latest
-      ? nextWorkDate(addDays(latest, 1), settings)
-      : usableWorkDate(
-          defaultDate ?? localDate(now, settings.timeZone),
-          settings,
-          now,
-        );
+    const date = usableWorkDate(
+      latest
+        ? addDays(latest, 1)
+        : (defaultDate ?? localDate(now, settings.timeZone)),
+      settings,
+      now,
+    );
     onChange([...rows, { id: crypto.randomUUID(), date, hours: "" }]);
   }
   return (

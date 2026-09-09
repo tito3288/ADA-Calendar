@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDemoState, DEMO_MEMBERS } from "./fixtures";
 import { localDateTime } from "./time";
 import { newWorkItem } from "./work";
+import { planCommands } from "./scheduler";
+import { withReviewFingerprint } from "./server/preview";
+import { workspaceChatOperationId, workspaceChatRecord, type WorkspaceChatCommand } from "./server/workspace-chat";
 import type { WorkspaceChatResponse } from "./workspace-chat";
 
 // These tests use only isolated fictional demo storage and captured mail.
@@ -149,6 +152,29 @@ describe("separate workspace chat API", () => {
     const body = await preview(); vi.setSystemTime(new Date("2026-09-09T13:01:00Z"));
     const result = await confirm(body); expect(result.status).toBe(409); expect((await result.json()).reply.kind).toBe("clarification");
     expect((await getDemoState(owner)).events).toHaveLength(0);
+  });
+  it("requires a fresh review when an old day-total preview excluded elapsed planned hours", async () => {
+    vi.setSystemTime(new Date("2026-09-09T18:30:00Z"));
+    await demoTransaction(state => {
+      state.items = [newWorkItem(owner, day, { id: "missed-total", clientId: "demo", title: "Fictional missed work", remainingMinutes: 240, estimatedMinutes: 240 })];
+      const at = (clock: string) => localDateTime(day, clock, state.settings.timeZone);
+      state.sessions = [{ id: "elapsed", workItemId: "missed-total", start: at("09:00"), end: at("11:00"), status: "planned", protected: false, usesReserve: false },
+        { id: "upcoming", workItemId: "missed-total", start: at("15:00"), end: at("17:00"), status: "planned", protected: false, usesReserve: false }];
+    });
+    const before = await getDemoState(owner), now = new Date().toISOString(), operationId = "legacy-upcoming-total";
+    const command: WorkspaceChatCommand = { type: "set_day_hours", itemId: "missed-total", days: [{ date: day, minutes: 60 }] };
+    // The old 1h upcoming-only interpretation kept the elapsed 2h, for 3h total.
+    const oldPlan = withReviewFingerprint({ ...planCommands(before, [{ ...command, days: [{ date: day, minutes: 180 }] }], owner, { now, operationId: workspaceChatOperationId(operationId) }), commands: [command] });
+    expect(oldPlan.status).toBe("ready");
+    const oldResponse: WorkspaceChatResponse = { reply: { kind: "preview", message: "Set upcoming hours to 1h", sources: [], proposal: oldPlan }, operationId, stateVersion: before.version, asOf: now };
+    await store.beginAI(owner, { id: operationId, kind: "assistant", inputHash: "c".repeat(64), reserveUsd: 0 });
+    await store.finishAI(owner, operationId, workspaceChatRecord(owner, before, oldResponse, "Set Fictional missed work to 1 hour today", day, "edit", undefined, command));
+    const response = await confirm(oldResponse);
+    expect(response.status).toBe(409);
+    const refreshed = await response.json() as WorkspaceChatResponse;
+    expect(refreshed.reply.proposal!.reviewFingerprint).not.toBe(oldPlan.reviewFingerprint);
+    expect(await getDemoState(owner)).toEqual(before);
+    expect(store.commit).not.toHaveBeenCalled();
   });
   it("binds message retries to exact text, day and parent without rerunning or mutating", async () => {
     const before = await preview();

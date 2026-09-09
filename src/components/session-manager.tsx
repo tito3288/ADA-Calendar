@@ -9,13 +9,7 @@ import type {
   WorkItem,
   WorkSession,
 } from "@/lib/types";
-import {
-  addDays,
-  instantMs,
-  localDate,
-  nextWorkDate,
-  minutesBetween,
-} from "@/lib/time";
+import { addDays, instantMs, localDate, minutesBetween } from "@/lib/time";
 import {
   bookedDayHours,
   changedDayHours,
@@ -76,9 +70,9 @@ export function SessionManager({
         session.workItemId === item.id && session.status === "planned",
     )
     .sort((a, b) => a.start.localeCompare(b.start));
-  const originalDays = bookedDayHours(original, zone, openedAt);
+  const originalDays = bookedDayHours(original, zone);
   const [days, setDays] = useState<DayHoursDraft[]>(() =>
-    dayHoursDrafts(bookedDayHours(initialSessions ?? original, zone, openedAt)),
+    dayHoursDrafts(bookedDayHours(initialSessions ?? original, zone)),
   );
   const [addDaysDraft, setAddDaysDraft] = useState<DayHoursDraft[]>(() => [
     {
@@ -97,12 +91,7 @@ export function SessionManager({
   const [operationId, setOperationId] = useState(() => crypto.randomUUID());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const locked = (row: SessionDraft) =>
-    original.some(
-      (session) =>
-        session.id === row.id && instantMs(session.start) < instantMs(openedAt),
-    );
-  const history = original.filter(
+  const elapsedBookings = original.filter(
     (session) => instantMs(session.start) < instantMs(openedAt),
   );
   function invalidate() {
@@ -128,7 +117,6 @@ export function SessionManager({
   }
   function addExact() {
     const last = rows
-      .filter((row) => !locked(row))
       .map((row) => row.date)
       .sort()
       .at(-1);
@@ -136,7 +124,11 @@ export function SessionManager({
       ...rows,
       {
         id: crypto.randomUUID(),
-        date: nextWorkDate(last ? addDays(last, 1) : today, state.settings),
+        date: usableWorkDate(
+          last ? addDays(last, 1) : today,
+          state.settings,
+          new Date().toISOString(),
+        ),
         start: "09:00",
         end: "10:00",
         protected: false,
@@ -182,7 +174,6 @@ export function SessionManager({
   try {
     bookingTotal = exactTimes
       ? rows
-          .filter((row) => !locked(row))
           .map((row) => draftSession(row, item.id, zone))
           .reduce(
             (sum, session) => sum + minutesBetween(session.start, session.end),
@@ -226,20 +217,6 @@ export function SessionManager({
         const changed = changedDayHours(originalDays, desiredDays());
         if (!changed.length)
           throw new Error("Change a day or its hours before reviewing.");
-        const previewTime = new Date().toISOString();
-        if (
-          original.some(
-            (session) =>
-              changed.some(
-                (day) => day.date === localDate(session.start, zone),
-              ) &&
-              instantMs(session.start) >= instantMs(openedAt) &&
-              instantMs(session.start) < instantMs(previewTime),
-          )
-        )
-          throw new Error(
-            "A booking on an edited day has started. Close and reopen this editor to review the remaining upcoming hours.",
-          );
         commands = [
           {
             type: "set_day_hours",
@@ -358,7 +335,7 @@ export function SessionManager({
       )}
       <div className="session-manager-budget" aria-live="polite">
         <strong>
-          {bookingTotal === null ? "—" : formatHours(bookingTotal)} upcoming
+          {bookingTotal === null ? "—" : formatHours(bookingTotal)} planned
           hours after this edit
         </strong>
         <span>
@@ -378,14 +355,14 @@ export function SessionManager({
             onChange={editDays}
             settings={state.settings}
             defaultDate={today}
-            emptyText="No future days booked. Add a day to reserve time."
+            emptyText="No days booked. Add a day to reserve time."
           />
         )}
-        {history.length > 0 && (
+        {elapsedBookings.length > 0 && (
           <p className="micro muted">
-            {history.length} started or past booking
-            {history.length === 1 ? " is" : "s are"} kept as history. Editing
-            future days does not mark any work complete.
+            Past scheduled times do not mark work complete. These hours are
+            still planned, so you can move them to another day without adding
+            work.
           </p>
         )}
         {initialRemainingMinutes !== undefined && (
@@ -421,10 +398,7 @@ export function SessionManager({
                 work.
               </p>
               {rows.map((row, index) => (
-                <div
-                  className={`session-manager-row ${locked(row) ? "session-manager-history" : ""}`}
-                  key={row.id}
-                >
+                <div className="session-manager-row" key={row.id}>
                   <div className="session-manager-row-title">
                     <strong>
                       {row.date
@@ -435,16 +409,12 @@ export function SessionManager({
                           })
                         : `Session ${index + 1}`}
                     </strong>
-                    {locked(row) && (
-                      <span>History / already started · read-only</span>
-                    )}
                   </div>
                   <div className="form-grid">
                     <Field label={`Session ${index + 1} date`}>
                       <input
                         type="date"
                         value={row.date}
-                        disabled={locked(row)}
                         onChange={(event) =>
                           patchExact(row.id, { date: event.target.value })
                         }
@@ -455,7 +425,6 @@ export function SessionManager({
                         type="time"
                         step="900"
                         value={row.start}
-                        disabled={locked(row)}
                         onChange={(event) =>
                           patchExact(row.id, { start: event.target.value })
                         }
@@ -466,7 +435,6 @@ export function SessionManager({
                         type="time"
                         step="900"
                         value={row.end}
-                        disabled={locked(row)}
                         onChange={(event) =>
                           patchExact(row.id, { end: event.target.value })
                         }
@@ -478,7 +446,6 @@ export function SessionManager({
                       <input
                         type="checkbox"
                         checked={row.protected}
-                        disabled={locked(row)}
                         onChange={(event) =>
                           patchExact(row.id, {
                             protected: event.target.checked,
@@ -491,32 +458,26 @@ export function SessionManager({
                     {row.usesReserve && (
                       <span className="micro muted">Uses reserve</span>
                     )}
-                    {!locked(row) && (
-                      <>
-                        <button
-                          type="button"
-                          className="text-button"
-                          onClick={() => split(row)}
-                          aria-label={`Split session ${index + 1}`}
-                        >
-                          <Scissors size={13} />
-                          Split
-                        </button>
-                        <button
-                          type="button"
-                          className="text-button"
-                          onClick={() =>
-                            editExact(
-                              rows.filter((entry) => entry.id !== row.id),
-                            )
-                          }
-                          aria-label={`Remove session ${index + 1}`}
-                        >
-                          <Trash2 size={13} />
-                          Remove
-                        </button>
-                      </>
-                    )}
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => split(row)}
+                      aria-label={`Split session ${index + 1}`}
+                    >
+                      <Scissors size={13} />
+                      Split
+                    </button>
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() =>
+                        editExact(rows.filter((entry) => entry.id !== row.id))
+                      }
+                      aria-label={`Remove session ${index + 1}`}
+                    >
+                      <Trash2 size={13} />
+                      Remove
+                    </button>
                   </div>
                 </div>
               ))}

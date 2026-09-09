@@ -89,11 +89,32 @@ describe("booking edits through authenticated atomic commands",()=>{
     vi.setSystemTime(new Date(at("11:01")));
     expect((await commit(proposal)).status).toBe(409);expect(await getDemoState(owner)).toEqual(before);
   });
-  it("cannot change a protected booking or a started booking without authority",async()=>{
+  it.each(["09:30","11:30","17:30"])("moves missed planned work at %s through the authenticated transaction without adding effort",async time=>{
+    vi.setSystemTime(new Date(at(time)));
+    const before=await getDemoState(owner),privateNotes=await notes();
+    const proposal=await preview(`missed-${time.replace(":","-")}`,{type:"move_booking",sessionId:"build-session",date:next});
+    expect(await getDemoState(owner)).toEqual(before);
+    expect((await commit(proposal)).status).toBe(200);
+    const saved=await getDemoState(owner),booking=saved.sessions.find(session=>session.id==="build-session")!;
+    expect(booking).toMatchObject({start:at("10:00",next),end:at("12:00",next),status:"planned"});
+    expect(minutesBetween(booking.start,booking.end)).toBe(120);
+    expect(saved.items[0]).toMatchObject({remainingMinutes:240,estimatedMinutes:240});
+    expect(saved.sessions.find(session=>session.id==="other-session")).toEqual(before.sessions[1]);
+    expect(await notes()).toEqual(privateNotes);
+    expect((await commit(proposal)).status).toBe(200);expect(await getDemoState(owner)).toEqual(saved);
+  });
+  it("cannot change a protected booking without explicit authority",async()=>{
     const before=await getDemoState(owner);
     const response=await send({commands:[{type:"resize_booking",sessionId:"other-session",minutes:30}],operationId:"protected-edit",action:"preview"});
     const {proposal}=await response.json();expect(proposal.conflicts[0].code).toBe("protected_session");expect((await commit(proposal)).status).toBe(400);
-    vi.setSystemTime(new Date(at("09:01")));const started=await send({commands:[resize],operationId:"started-edit",action:"preview"});expect((await started.json()).proposal.conflicts[0].code).toBe("historical_session");expect(await getDemoState(owner)).toEqual(before);
+    expect(await getDemoState(owner)).toEqual(before);
+  });
+  it.each(["completed","cancelled"] as const)("cannot move a %s session even after its scheduled time",async status=>{
+    const fixture=JSON.parse(await readFile(filename,"utf8"));fixture.sessions[0].status=status;await writeFile(filename,JSON.stringify(fixture));
+    vi.setSystemTime(new Date(at("17:30")));const before=await getDemoState(owner);
+    const response=await send({commands:[{type:"move_booking",sessionId:"build-session",date:next}],operationId:`immutable-${status}`,action:"preview"});
+    expect(response.status).toBe(200);const {proposal}=await response.json();expect(proposal.status).toBe("infeasible");
+    expect((await commit(proposal)).status).toBe(400);expect(await getDemoState(owner)).toEqual(before);
   });
   it.each([1,3])("refuses requester/viewer editing (fixture %s)",async index=>{
     const before=await getDemoState(owner);vi.mocked(currentActor).mockResolvedValue(DEMO_MEMBERS[index]);

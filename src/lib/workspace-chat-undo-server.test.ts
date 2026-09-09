@@ -99,24 +99,34 @@ describe("undoing an existing-project chat booking change",()=>{
     const saved=await save(resize);expect((await send("undo",{id:"unknown-event"})).status).toBe(400);
     expect((await send("undo",{id:saved.events[0].id},"https://invalid.example.test")).status).toBe(400);expect(await getDemoState(owner)).toEqual(saved);
   });
-  it("does not remove an added booking after that new booking starts",async()=>{
+  it("can undo an unworked added booking after its scheduled start",async()=>{
     const saved=await save({...add,request:{...add.request,startDate:date,endDate:date}});vi.setSystemTime(new Date(at("11:01")));
-    expect(undoUnavailableReason(saved,saved.events[0],at("11:01"))).toContain("already started");
-    const response=await send("undo",{id:saved.events[0].id});expect(response.status).toBe(400);expect((await response.json()).error).toContain("already started");expect(await getDemoState(owner)).toEqual(saved);
+    expect(undoUnavailableReason(saved,saved.events[0],at("11:01"))).toBeNull();
+    const response=await send("undo",{id:saved.events[0].id});expect(response.status).toBe(200);expect((await getDemoState(owner)).sessions).toEqual(saved.events[0].before.sessions);
   });
-  it.each([undefined,60])("does not remove a whole/partial moved booking when its destination session starts (%s)",async minutes=>{
+  it.each([undefined,60])("can undo a whole/partial move after its planned destination time (%s)",async minutes=>{
     await demoTransaction(state=>{state.sessions[0].start=at("09:00","2026-09-11");state.sessions[0].end=at("11:00","2026-09-11");});
     const saved=await save({type:"move_booking",sessionId:"build-session",date,...(minutes?{minutes}:{})});vi.setSystemTime(new Date(at("09:01")));
-    expect((await send("undo",{id:saved.events[0].id})).status).toBe(400);expect(await getDemoState(owner)).toEqual(saved);
+    expect((await send("undo",{id:saved.events[0].id})).status).toBe(200);expect((await getDemoState(owner)).sessions).toEqual(saved.events[0].before.sessions);
   });
-  it("does not erase resumed waiting-project hours once they start",async()=>{
+  it("can undo resumed waiting-project hours if they remain planned",async()=>{
     await demoTransaction(state=>{state.items[0].estimatedMinutes=null;state.items[0].remainingMinutes=null;state.items[0].status="waiting";state.items[0].blockedReason="Awaiting details";state.sessions=state.sessions.filter(s=>s.workItemId!=="build");});
     const saved=await save({...add,request:{...add.request,startDate:date,endDate:date,resumeWaiting:true}});vi.setSystemTime(new Date(at("09:01")));
-    expect((await send("undo",{id:saved.events[0].id})).status).toBe(400);expect(await getDemoState(owner)).toEqual(saved);
+    expect((await send("undo",{id:saved.events[0].id})).status).toBe(200);expect((await getDemoState(owner)).sessions).toEqual(saved.events[0].before.sessions);
   });
-  it("cannot restore an original booking whose old time has passed even if its current booking is still future",async()=>{
+  it("can restore the exact original unworked booking after its scheduled time",async()=>{
     const saved=await save({type:"move_booking",sessionId:"build-session",date:next});vi.setSystemTime(new Date(at("09:01")));
-    expect(undoUnavailableReason(saved,saved.events[0],at("09:01"))).toContain("restore work into the past");expect((await send("undo",{id:saved.events[0].id})).status).toBe(400);expect(await getDemoState(owner)).toEqual(saved);
+    expect(undoUnavailableReason(saved,saved.events[0],at("09:01"))).toBeNull();expect((await send("undo",{id:saved.events[0].id})).status).toBe(200);expect((await getDemoState(owner)).sessions).toEqual(saved.events[0].before.sessions);
+  });
+  it("moves missed work after 5 PM and Undo restores the same uncompleted hours",async()=>{
+    vi.setSystemTime(new Date(at("18:38")));
+    const before=await getDemoState(owner);
+    const saved=await save({type:"move_booking",sessionId:"build-session",date:next});
+    expect(saved.items[0].remainingMinutes).toBe(before.items[0].remainingMinutes);
+    expect((await send("undo",{id:saved.events[0].id})).status).toBe(200);
+    const restored=await getDemoState(owner);
+    expect(restored.items).toEqual(before.items);expect(restored.sessions).toEqual(before.sessions);
+    expect(restored.notifications.every(n=>n.status==="captured")).toBe(true);
   });
   it("does not confuse unchanged historical JSON property order with a booking edit",async()=>{
     await demoTransaction(state=>{state.sessions.push({...state.sessions[0],id:"history",start:at("09:00","2026-09-08"),end:at("11:00","2026-09-08"),status:"completed"});});
@@ -124,11 +134,11 @@ describe("undoing an existing-project chat booking change",()=>{
     copy.events[0].before.sessions=copy.events[0].before.sessions.map(s=>s.id==="history"?Object.fromEntries(Object.entries(historical).reverse()) as typeof historical:s);
     expect(undoUnavailableReason(copy,copy.events[0],at("08:00"))).toBeNull();expect((await send("undo",{id:saved.events[0].id})).status).toBe(200);
   });
-  it("blocks status or focus-only changes to started history, including completed/cancelled rows",async()=>{
+  it("blocks changes to recorded completed/cancelled history regardless of clock time",async()=>{
     const saved=await save(resize);
-    for(const status of ["planned","completed","cancelled"] as const){
+    for(const status of ["completed","cancelled"] as const){
       const copy=structuredClone(saved);copy.sessions[0].status=status;copy.events[0].before.sessions[0]={...copy.sessions[0],focusOverrideMinutes:30};
-      expect(undoUnavailableReason(copy,copy.events[0],at("09:01"))).toContain("already started");
+      expect(undoUnavailableReason(copy,copy.events[0],at("09:01"))).toContain("completed or cancelled");
     }
   });
 });

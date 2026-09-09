@@ -239,7 +239,7 @@ describe("manual session drafts", () => {
     expect(proposal.sessions.find(session => session.id === "remainder")).toEqual(original[1]);
   });
 
-  it("accepts existing shorter bookings and leaves historical metadata unchanged", () => {
+  it("accepts existing shorter bookings and leaves unchanged elapsed planned bookings intact", () => {
     const work = item({ windowStart: "2026-09-07", estimatedMinutes: 180, remainingMinutes: 180, minimumSessionMinutes: 120 });
     const past = session("past", "2026-09-07", "11:00", "12:00", true);
     const original = [past, session("first", "2026-09-14"), session("remainder", "2026-09-14", "11:00", "12:00")];
@@ -368,7 +368,7 @@ describe("manual session drafts", () => {
     ).toMatchObject({ overrideProtected: true });
   });
 
-  it("preserves history without counting it as completed or as future effort", () => {
+  it("moves missed planned hours to a future date without increasing effort or completing work", () => {
     const work = item({
       windowStart: "2026-09-07",
       remainingMinutes: 120,
@@ -376,27 +376,22 @@ describe("manual session drafts", () => {
       dailyPlan: [{ date: "2026-09-07", minutes: 120 }],
     });
     const past = session("past", "2026-09-07");
-    const future = session("future", "2026-09-14");
+    const moved = { ...past, start: session("past", "2026-09-14").start, end: session("past", "2026-09-14").end };
     const commands = sessionManagementCommands({
       item: work,
       original: [past],
-      rows: [past, future].map((row) => sessionDraft(row, zone)),
+      rows: [sessionDraft(moved, zone)],
       zone,
       now,
     });
     expect(commands[0]).toMatchObject({
       patch: { dailyPlan: [{ date: "2026-09-14", minutes: 120 }] },
     });
-    expect(commands.at(-1)).toMatchObject({ sessions: [past, future] });
-    expect(() =>
-      sessionManagementCommands({
-        item: work,
-        original: [past],
-        rows: [sessionDraft(future, zone)],
-        zone,
-        now,
-      }),
-    ).toThrow("Past sessions are history");
+    expect(commands.at(-1)).toMatchObject({ sessions: [moved] });
+    const movedProposal = planCommands(base(work, [past]), commands, owner, { now });
+    expect(movedProposal.status, JSON.stringify(movedProposal.conflicts)).toBe("ready");
+    expect(movedProposal.sessions).toEqual([moved]);
+    expect(movedProposal.items[0]).toMatchObject({ remainingMinutes: 120, estimatedMinutes: 120, status: "planned", completedAt: null });
     const unchanged = sessionManagementCommands({
         item: work,
         original: [past],
@@ -408,6 +403,24 @@ describe("manual session drafts", () => {
     expect(proposal.status, JSON.stringify(proposal.conflicts)).toBe("ready");
     expect(proposal.sessions).toEqual([past]);
     expect(proposal.items[0]).toMatchObject({remainingMinutes:120,estimatedMinutes:120,forecastDate:null});
+  });
+
+  it.each(["completed", "cancelled"] as const)("does not turn a %s session into planned work", status => {
+    const closed = { ...session("closed", "2026-09-07"), status };
+    const work = item();
+    expect(() => sessionManagementCommands({ item: work, original: [closed], rows: [sessionDraft(closed, zone)], zone, now })).toThrow("Completed or cancelled");
+    const proposal = planCommands(base(work, [closed]), sessionManagementCommands({ item: work, original: [closed], rows: [], zone, now }), owner, { now });
+    expect(proposal.status, JSON.stringify(proposal.conflicts)).toBe("ready");
+    expect(proposal.sessions).toEqual([closed]);
+  });
+
+  it("moves an existing excess reservation without enlarging it or changing reported effort", () => {
+    const work = item({ remainingMinutes: 60, estimatedMinutes: 120 });
+    const missed = session("missed", "2026-09-07"), moved = { ...sessionDraft(missed, zone), date: "2026-09-14" };
+    const commands = sessionManagementCommands({ item: work, original: [missed], rows: [moved], zone, now, remainingMinutes: 60 });
+    expect(commands[0]).toMatchObject({ type: "update", patch: { remainingMinutes: 60 } });
+    expect(commands.at(-1)).toMatchObject({ type: "schedule", sessions: [{ id: "missed", start: localDateTime("2026-09-14", "09:00", zone), end: localDateTime("2026-09-14", "11:00", zone) }] });
+    expect(() => sessionManagementCommands({ item: work, original: [missed], rows: [moved, sessionDraft(session("extra", "2026-09-15"), zone)], zone, now, remainingMinutes: 60 })).toThrow("exceed the remaining effort");
   });
 
   it("preserves unknown totals when adding or removing all future sessions", () => {
@@ -451,7 +464,7 @@ describe("manual session drafts", () => {
     }
   });
 
-  it("preserves historical and unrelated work when releasing future hours and revising remaining effort", () => {
+  it("preserves unchanged missed and unrelated work when releasing another booking and revising effort", () => {
     const past = session("past", "2026-09-07");
     const work = item({ windowStart: "2026-09-07", dailyPlan: [{ date: "2026-09-07", minutes: 120 }, { date: "2026-09-14", minutes: 120 }] });
     const original = [past, week()[0]];
@@ -462,7 +475,7 @@ describe("manual session drafts", () => {
     const proposal = planCommands(snapshot, commands, owner, { now });
     expect(proposal.status, JSON.stringify(proposal.conflicts)).toBe("ready");
     expect(proposal.sessions).toEqual([past, unrelated]);
-    expect(proposal.items[0]).toMatchObject({ remainingMinutes: 360, estimatedMinutes: 600, dailyPlan: [], forecastDate: null });
+    expect(proposal.items[0]).toMatchObject({ remainingMinutes: 360, estimatedMinutes: 600, dailyPlan: [{ date: "2026-09-07", minutes: 120 }], forecastDate: null });
     expect(proposal.items[1]).toEqual(snapshot.items[1]);
   });
 
@@ -482,7 +495,7 @@ describe("manual session drafts", () => {
     expect(approved.sessions).toEqual([original[1]]);
   });
 
-  it("requires explicit resume and does not change an underway session", () => {
+  it("requires explicit resume and permits moving planned work after its scheduled start", () => {
     const work = item({
       remainingMinutes: null,
       estimatedMinutes: null,
@@ -512,6 +525,7 @@ describe("manual session drafts", () => {
         now,
       }),
     ).not.toThrow();
-    expect(() => sessionManagementCommands({ item: item(), original: [underway], rows: [{ ...sessionDraft(underway, zone), end: "10:00" }], zone, now })).toThrow("Past sessions are history");
+    expect(() => sessionManagementCommands({ item: item(), original: [underway], rows: [{ ...sessionDraft(underway, zone), end: "10:00" }], zone, now })).toThrow("must start in the future");
+    expect(() => sessionManagementCommands({ item: item(), original: [underway], rows: [{ ...sessionDraft(underway, zone), date: "2026-09-14", start: "09:00", end: "11:00" }], zone, now })).not.toThrow();
   });
 });

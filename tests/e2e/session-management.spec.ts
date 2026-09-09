@@ -63,7 +63,7 @@ for (const width of [1440, 390]) test(`redistributes three bookings into five da
   await dialog.getByRole("button", { name: "Add session", exact: true }).click();
   await expect(dialog.getByLabel("Session 5 date", { exact: true })).toHaveValue("2026-09-18");
   await dialog.getByLabel("Session 5 end", { exact: true }).fill("11:00");
-  await expect(dialog.locator(".session-manager-budget")).toContainText("10h upcoming hours after this edit");
+  await expect(dialog.locator(".session-manager-budget")).toContainText("10h planned hours after this edit");
   await dialog.locator(".session-manager").screenshot({ path: info.outputPath(`session-manager-${width}.png`) });
   expect((await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations).toEqual([]);
   await dialog.getByRole("button", { name: "Review changes", exact: true }).click();

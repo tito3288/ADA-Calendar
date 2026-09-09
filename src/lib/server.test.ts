@@ -462,12 +462,23 @@ describe("assistant route admission and retries", () => {
     expect(await getDemoState(DEMO_MEMBERS[0])).toEqual(before);
     expect(interpretInput).not.toHaveBeenCalled();
   });
-  it("returns a previously committed pre-upgrade instruction without duplicating its effects", async () => {
+  it("requires fresh intent before applying cached v1 upcoming-only day totals to elapsed planned work", async () => {
+    const before = await getDemoState(DEMO_MEMBERS[0]);
+    vi.mocked(store.beginAI).mockResolvedValueOnce({ status: "completed", result: { scheduleSemantics: "days-hours-v1", interpretation: { kind: "commands", message: "Legacy upcoming hours", commands: [{ type: "set_day_hours", itemId: before.items[0].id, days: [{ date: "2026-09-09", minutes: 60 }] }] } } });
+    const response = await request("assistant", { text: "Set the task to 1 hour today", operationId: "v1-upcoming-only-hours" });
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toContain("fresh plan");
+    expect(await getDemoState(DEMO_MEMBERS[0])).toEqual(before);
+    expect(interpretInput).not.toHaveBeenCalled();
+    expect(store.commit).not.toHaveBeenCalled();
+  });
+  it.each([undefined, "days-hours-v1"])("returns a previously committed pre-upgrade instruction (%s) without duplicating its effects", async scheduleSemantics => {
     const input = { text: "Add IT work for Higher Ground Tree: Fictional committed legacy work, 1 hour on 2030-09-09", operationId: "pre-upgrade-committed" };
     expect((await request("assistant", input)).status).toBe(200);
     const saved = await getDemoState(DEMO_MEMBERS[0]);
-    const result = (await store.getAI(DEMO_MEMBERS[0], input.operationId)).result as { interpretation: Interpretation };
-    vi.mocked(store.beginAI).mockResolvedValueOnce({ status: "completed", result: { interpretation: result.interpretation } });
+    const result = (await store.getAI(DEMO_MEMBERS[0], input.operationId)).result as { interpretation: Interpretation; scheduleSemantics: string };
+    expect(result.scheduleSemantics).toBe("days-hours-v2");
+    vi.mocked(store.beginAI).mockResolvedValueOnce({ status: "completed", result: { interpretation: result.interpretation, scheduleSemantics } });
     expect((await request("assistant", input)).status).toBe(200);
     expect(await getDemoState(DEMO_MEMBERS[0])).toEqual(saved);
   });

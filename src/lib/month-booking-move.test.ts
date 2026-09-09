@@ -86,8 +86,8 @@ describe("atomic month-segment booking moves",()=>{
   it.each(["completed","cancelled"] as const)("refuses %s sessions",status=>{
     const state=snapshot();state.sessions[1].status=status;failed(state,plan(state),"historical_session");
   });
-  it("refuses started sessions and past destinations",()=>{
-    const state=snapshot();failed(state,plan(state,command(),owner,at("09:01")),"historical_session");
+  it("moves still-planned bookings after their start time and refuses past destinations",()=>{
+    const state=snapshot();ready(state,plan(state,command(),owner,at("09:01")));
     failed(state,plan(state,command(undefined,"2026-09-08")),"historical_session");
   });
   it.each(["waiting","completed","cancelled"] as const)("refuses inactive %s projects without resuming them",status=>{

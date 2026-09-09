@@ -236,7 +236,7 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
             const conflict = fitConflict ?? dailyConflict;
             if (conflict) interpretation = { ...interpretation, kind: "clarification", commands: [], message: conflict.message };
           }
-          await store.finishAI(actor, input.operationId, { interpretation, scheduleSemantics: "days-hours-v1", continuation: nextContinuation(input.text, interpretation, now, continuation, dateSelection) }, demoEnabled() ? undefined : interpretation.usage?.costUsd);
+          await store.finishAI(actor, input.operationId, { interpretation, scheduleSemantics: "days-hours-v2", continuation: nextContinuation(input.text, interpretation, now, continuation, dateSelection) }, demoEnabled() ? undefined : interpretation.usage?.costUsd);
         } catch (error) {
           await store.finishAI(actor, input.operationId, null, undefined, "The AI request did not complete. Its budget reservation was retained.");
           throw error;
@@ -248,7 +248,7 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
       if (interpretation.kind === "commands") {
         const commands = z.array(commandSchema).min(1).max(30).parse(interpretation.commands) as WorkCommand[];
         const committed = operation.status === "completed" && await store.hasCommittedOperation(actor, input.operationId, commands);
-        if (operation.status === "completed" && (operation.result as { scheduleSemantics?: string }).scheduleSemantics !== "days-hours-v1" && !committed) {
+        if (operation.status === "completed" && (operation.result as { scheduleSemantics?: string }).scheduleSemantics !== "days-hours-v2" && !committed) {
           return NextResponse.json({ error: "The calendar's scheduling rules have been updated. Submit this instruction again to review a fresh plan. Nothing has changed.", state }, { status: 409 });
         }
         proposal = planCommands(state, commands, actor, { operationId: input.operationId, approveDisplacement: actor.role === "owner" });

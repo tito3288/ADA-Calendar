@@ -1,5 +1,5 @@
 import { dayCapacity } from "./scheduler";
-import { dayOfWeek, instantMs, isDate, isInstant, localDate, minutesBetween } from "./time";
+import { dayOfWeek, isDate, isInstant, localDate, minutesBetween } from "./time";
 import type { AppState, ScheduleProposal } from "./types";
 
 export interface CalendarBookingMoveSelection { sessionIds: string[]; date: string }
@@ -13,7 +13,8 @@ export function calendarBookingMoveSourceUnavailableReason(state: AppState, sess
   const sessions = sessionIds.map(id => state.sessions.find(session => session.id === id));
   if (sessions.some(session => !session)) return "These bookings changed. Refresh the calendar before moving them.";
   const booked = sessions.filter(session => session !== undefined);
-  if (booked.some(session => session.status !== "planned" || !isInstant(session.start) || instantMs(session.start) < instantMs(now))) return "Only upcoming booked hours can be moved. Started or completed work stays unchanged.";
+  if (booked.some(session => session.status !== "planned")) return "Completed or cancelled bookings cannot be moved.";
+  if (booked.some(session => !isInstant(session.start))) return "These bookings changed. Refresh the calendar before moving them.";
   if (booked.some(session => session.protected)) return "These booked hours are protected. Use Edit hours for an explicit owner override.";
   if (booked.some(session => session.usesReserve)) return "These booked hours use interruption reserve. Use Edit hours to keep its permissions explicit.";
   if (new Set(booked.map(session => session.workItemId)).size !== 1 || new Set(booked.map(session => localDate(session.start, state.settings.timeZone))).size !== 1) return "Move one project's booked hours from one day at a time.";

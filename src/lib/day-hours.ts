@@ -39,15 +39,10 @@ export function usableWorkDate(
 export function bookedDayHours(
   sessions: readonly WorkSession[],
   timeZone: string,
-  now: string,
 ): DayHours[] {
   const dates = new Map<string, number>();
   for (const session of sessions) {
-    if (
-      session.status !== "planned" ||
-      instantMs(session.start) < instantMs(now)
-    )
-      continue;
+    if (session.status !== "planned") continue;
     const date = localDate(session.start, timeZone);
     dates.set(
       date,

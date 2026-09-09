@@ -127,6 +127,8 @@ export function sessionManagementCommands({
     (session) => session.workItemId === item.id && session.status === "planned",
   );
   const sessions = rows.map((row) => {
+    if (original.some((session) => session.id === row.id && session.status !== "planned"))
+      throw new Error("Completed or cancelled sessions cannot be edited here.");
     const old = planned.find((session) => session.id === row.id);
     if (old && JSON.stringify(sessionDraft(old, zone)) === JSON.stringify(row))
       return { ...old };
@@ -137,10 +139,6 @@ export function sessionManagementCommands({
   for (const old of planned) {
     const next = sessions.find((session) => session.id === old.id);
     const changed = JSON.stringify(next) !== JSON.stringify(old);
-    if (changed && instantMs(old.start) < instantMs(now))
-      throw new Error(
-        "Past sessions are history and cannot be changed or removed here.",
-      );
     if (changed && old.protected && !overrideProtected)
       throw new Error(
         "Authorize the change to protected sessions before previewing.",
@@ -151,21 +149,20 @@ export function sessionManagementCommands({
       instantMs(next.start) < instantMs(now) &&
       !planned.some((old) => JSON.stringify(old) === JSON.stringify(next))
     ) {
-      throw new Error("New sessions must start in the future.");
+      throw new Error("New or moved sessions must start in the future.");
     }
   }
-  const future = sessions.filter(
-    (session) => instantMs(session.start) >= instantMs(now),
-  );
-  const total = future.reduce(
+  const total = sessions.reduce(
     (sum, session) => sum + minutesBetween(session.start, session.end),
     0,
   );
   const effort = remainingMinutes ?? item.remainingMinutes;
   const remaining = effort === null ? null : Math.ceil(effort / 15) * 15;
-  if (remaining !== null && total > remaining)
+  const originalTotal = planned.reduce((sum, session) => sum + minutesBetween(session.start, session.end), 0);
+  const priorExcess = item.remainingMinutes === null ? 0 : Math.max(0, originalTotal - Math.ceil(item.remainingMinutes / 15) * 15);
+  if (remaining !== null && total > remaining + priorExcess)
     throw new Error("These sessions exceed the remaining effort. Reduce the booked hours or update remaining effort before previewing.");
-  if (item.status === "waiting" && future.length && !resume)
+  if (item.status === "waiting" && sessions.length && !resume)
     throw new Error(
       "Confirm that this waiting project should resume when its sessions are booked.",
     );
@@ -174,7 +171,7 @@ export function sessionManagementCommands({
   if (remainingMinutes !== undefined) patch.remainingMinutes = remainingMinutes;
   if (item.dailyPlan?.length) {
     const byDate = new Map<string, number>();
-    for (const session of future) {
+    for (const session of sessions) {
       const date = localDate(session.start, zone);
       byDate.set(
         date,
@@ -187,7 +184,7 @@ export function sessionManagementCommands({
   }
   if (Object.keys(patch).length)
     commands.push({ type: "update", itemId: item.id, patch, overrideProtected });
-  if (item.status === "waiting" && future.length)
+  if (item.status === "waiting" && sessions.length)
     commands.push({ type: "status", itemId: item.id, status: "planned" });
   commands.push({
     type: "schedule",

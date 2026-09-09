@@ -222,17 +222,17 @@ test("one protected session prevents dragging or picking a destination for its w
   expect(await state(page.request)).toEqual(fixture.saved);
 });
 
-test("already-started bookings remain visible without move controls", async ({ page }) => {
+test("unfinished planned bookings keep their move controls after the scheduled day ends", async ({ page }) => {
   const fixture = await seed(page, 400);
   await showMonth(page, fixture);
   // Advance only the browser clock after hydration. The real server fixture is
-  // still upcoming; server-side started-work rejection has separate coverage.
-  await page.clock.setFixedTime(new Date(localDateTime(fixture.source, "09:30", fixture.saved.settings.timeZone)));
+  // still upcoming; fixed-clock missed-booking tests also exercise the planner.
+  await page.clock.setFixedTime(new Date(localDateTime(fixture.source, "18:38", fixture.saved.settings.timeZone)));
   await page.getByRole("button", { name: "agenda", exact: true }).click();
   await page.getByRole("button", { name: "month", exact: true }).click();
   await expect(booked(page, fixture)).toBeVisible();
-  await expect(booked(page, fixture)).not.toHaveAttribute("draggable", "true");
-  await expect(handle(page, fixture).and(page.locator(":enabled"))).toHaveCount(0);
+  await expect(booked(page, fixture)).toHaveAttribute("draggable", "true");
+  await expect(handle(page, fixture)).toBeEnabled();
   expect(await state(page.request)).toEqual(fixture.saved);
 });
 

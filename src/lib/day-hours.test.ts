@@ -17,7 +17,7 @@ describe("day-hour editing", () => {
       usableWorkDate("2026-09-11", DEFAULT_SETTINGS, "2026-09-11T20:30:00Z"),
     ).toBe("2026-09-11");
   });
-  it("groups separated future sessions by local work day without treating history as editable", () => {
+  it("groups every planned booking by local work day, including missed hours, while excluding completed and cancelled work", () => {
     const session = (
       id: string,
       start: string,
@@ -35,7 +35,7 @@ describe("day-hour editing", () => {
     expect(
       bookedDayHours(
         [
-          session("history", "2026-09-09T13:00:00Z", "2026-09-09T14:00:00Z"),
+          session("missed", "2026-09-09T13:00:00Z", "2026-09-09T14:00:00Z"),
           session("morning", "2026-09-10T13:00:00Z", "2026-09-10T16:00:00Z"),
           session("afternoon", "2026-09-10T16:30:00Z", "2026-09-10T17:30:00Z"),
           session(
@@ -44,11 +44,19 @@ describe("day-hour editing", () => {
             "2026-09-11T14:00:00Z",
             "completed",
           ),
+          session(
+            "cancelled",
+            "2026-09-09T14:00:00Z",
+            "2026-09-09T15:00:00Z",
+            "cancelled",
+          ),
         ],
         "America/Indiana/Indianapolis",
-        "2026-09-09T15:00:00Z",
       ),
-    ).toEqual([{ date: "2026-09-10", minutes: 240 }]);
+    ).toEqual([
+      { date: "2026-09-09", minutes: 60 },
+      { date: "2026-09-10", minutes: 240 },
+    ]);
   });
   it("moves just the edited day's total while omitting unchanged days", () => {
     expect(

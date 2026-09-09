@@ -40,9 +40,10 @@ async function main() {
     const completedHistory = session("completed-history", "legacy", "2000-09-12", "09:00", "10:00", { status: "completed", focusOverrideMinutes: 60 });
     let state: ScheduleSnapshot = { workspaceId, version: 0, settings, priorities: DEFAULT_PRIORITIES, clients: [{ id: "fixture-client", name: "Fictional client", aliases: [] }],
       items: [work("legacy"), work("destination", { estimatedMinutes: 120, remainingMinutes: 120 }), work("protected", { estimatedMinutes: 60, remainingMinutes: 60 }),
+        work("missed", { estimatedMinutes: 120, remainingMinutes: 120, dailyPlan: [{ date: "2000-09-13", minutes: 120 }] }),
         work("ongoing", { estimatedMinutes: null, remainingMinutes: null, timelineMode: "span", windowEnd: null })],
       sessions: [session("monday", "legacy", monday, "09:00", "11:00"), session("tuesday", "legacy", tuesday, "09:00", "11:00"),
-        session("destination", "destination", friday, "09:00", "11:00"), session("protected", "protected", thursday, "09:00", "10:00", { protected: true }), historical, completedHistory],
+        session("destination", "destination", friday, "09:00", "11:00"), session("protected", "protected", thursday, "09:00", "10:00", { protected: true }), historical, completedHistory, session("missed", "missed", "2000-09-13", "09:00", "11:00")],
       blocks: [{ id: "friday-afternoon", title: "Fictional unavailable time", kind: "meeting", start: at(friday, "13:30"), end: at(friday, "17:00") }] };
     checked(await admin.from("workspaces").insert({ id: workspaceId, settings, priorities: state.priorities, clients: state.clients, items: state.items, blocks: state.blocks }));
     checked(await admin.from("workspace_members").insert(actors.map(actor => ({ workspace_id: workspaceId, user_id: actor.id, name: actor.name, email: actor.email, role: actor.role }))));
@@ -118,27 +119,43 @@ async function main() {
     changedHistory.start = at("2000-09-11", "10:00"); changedHistory.end = at("2000-09-11", "11:00");
     await rejected(history, /already started|history|past/i);
     for (const type of ["set_day_hours", "move_bookings"] as const) {
-      for (const historicalId of [historical.id, completedHistory.id]) {
+      for (const historicalId of [completedHistory.id]) {
         const deletion = freshCopy(basis);
         deletion.commands = type === "set_day_hours"
           ? [{ type, itemId: "legacy", days: [{ date: wednesday, minutes: 30 }] }]
           : [{ type, sessionIds: [historicalId], date: wednesday }];
         deletion.sessions = deletion.sessions.filter(s => s.id !== historicalId);
-        await rejected(deletion, /already started|history/i);
+        await rejected(deletion, /completed|cancelled|history/i);
         const movedHistory = freshCopy(basis);
         movedHistory.commands = deletion.commands;
         Object.assign(movedHistory.sessions.find(s => s.id === historicalId)!, { start: at(wednesday, "15:00"), end: at(wednesday, "16:00"), status: "planned" });
-        await rejected(movedHistory, /already started|history/i);
+        await rejected(movedHistory, /completed|cancelled|history/i);
       }
     }
     const undoHistory = freshCopy(basis); undoHistory.sessions = undoHistory.sessions.filter(s => s.id !== "historical");
-    await rejected(undoHistory, /already started/i, owner, event.id);
+    await rejected(undoHistory, /latest|original state/i, owner, event.id);
     const protectedProposal = plan([{ type: "set_day_hours", itemId: "protected", days: [{ date: thursday, minutes: 30 }], overrideProtected: true }]);
     const unauthorizedProtected = freshCopy(protectedProposal); unauthorizedProtected.commands = [{ type: "set_day_hours", itemId: "protected", days: [{ date: thursday, minutes: 30 }] }];
     await rejected(unauthorizedProtected, /Protected work/i); await save(protectedProposal);
     assert.equal(booked("protected", thursday), 30); assert.equal(state.sessions.find(s => s.id === "protected")!.protected, true);
+    // A missed planned booking can move without becoming extra work. Undo is
+    // the exact latest snapshot, including the original elapsed planned time.
+    const beforeMissed = structuredClone(state);
+    const moveMissed = plan([{ type: "move_bookings", sessionIds: ["missed"], date: tuesday }]);
+    await save(moveMissed);
+    assert.equal(booked("missed", "2000-09-13"), 0); assert.equal(booked("missed", tuesday), 120);
+    assert.equal(state.items.find(i => i.id === "missed")!.remainingMinutes, 120);
+    assert.deepEqual(state.items.find(i => i.id === "missed")!.dailyPlan, [{ date: tuesday, minutes: 120 }]);
+    const movedEvent = checked(await admin.from("work_events").select("id").eq("workspace_id", workspaceId).eq("operation_id", moveMissed.operationId).single()).data!;
+    const undoMissed = { ...freshCopy(moveMissed), commands: [], items: beforeMissed.items, sessions: beforeMissed.sessions, blocks: beforeMissed.blocks };
+    checked(await commit(undoMissed, owner, movedEvent.id)); state = await read();
+    assert.deepEqual(state.sessions, beforeMissed.sessions); assert.deepEqual(state.items, beforeMissed.items);
+    checked(await commit(undoMissed, owner, movedEvent.id)); assert.deepEqual(await read(), state, "Missed-booking Undo retries remain idempotent.");
+    await save(plan([{ type: "set_day_hours", itemId: "missed", days: [{ date: "2000-09-13", minutes: 0 }, { date: tuesday, minutes: 120 }] }]));
+    assert.equal(booked("missed", "2000-09-13"), 0); assert.equal(booked("missed", tuesday), 120);
+    assert.equal(state.items.find(i => i.id === "missed")!.remainingMinutes, 120);
     assert.equal(await count("notifications"), 0, "This isolated test never queues email.");
-    console.log("PASS: local Auth/SQL; legacy date/focus fields inert; known 4h→3h and unknown totals; atomic multi-gap move; zero-day removal; replay/stale/requester rejection; explicit date/deadline enforcement; protected override; direct-RPC started/history deletion and move rejection; Undo guards and flexible legacy Undo. No email queued or sent.");
+    console.log("PASS: local Auth/SQL; legacy date/focus fields inert; known 4h→3h and unknown totals; atomic multi-gap move; zero-day removal; replay/stale/requester rejection; explicit date/deadline enforcement; protected override; completed-history mutation rejection; missed planned moves/day edits preserve effort and quotas; exact Undo restores elapsed bookings; replay and forged-Undo guards. No email queued or sent.");
   } finally {
     for (const table of ["ai_operations", "ai_usage", "email_drafts", "attachments", "notifications", "pending_requests", "work_events", "work_sessions", "workspace_members", "workspaces"]) {
       const result = await admin.from(table).delete().eq(table === "workspaces" ? "id" : "workspace_id", workspaceId);

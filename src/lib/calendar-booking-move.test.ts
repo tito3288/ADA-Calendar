@@ -25,9 +25,11 @@ function event(state: AppState, patch: Partial<WorkEvent> = {}): WorkEvent {
 }
 
 describe("calendar booking move convenience checks", () => {
-  it("allows one upcoming booked segment or all of its same-day sessions", () => {
+  it("allows planned booked segments before or after their scheduled times", () => {
     const state = fixture();
     expect(calendarBookingMoveSourceUnavailableReason(state, ["morning", "afternoon"], now)).toBeNull();
+    expect(calendarBookingMoveSourceUnavailableReason(state, ["morning", "afternoon"], "2026-09-09T22:38:00Z")).toBeNull();
+    expect(calendarBookingMoveSourceUnavailableReason(state, ["morning", "afternoon"], "2026-09-10T12:00:00Z")).toBeNull();
     expect(calendarBookingMoveSourceUnavailableReason(state, ["morning"], now)).toContain("changed");
     state.sessions = state.sessions.slice(0, 1);
     expect(calendarBookingMoveSourceUnavailableReason(state, ["morning"], now)).toBeNull();
@@ -36,7 +38,7 @@ describe("calendar booking move convenience checks", () => {
     const state = fixture();
     for (const ids of [[], ["missing"], ["morning", "morning"]]) expect(calendarBookingMoveSourceUnavailableReason(state, ids, now)).toBeTruthy();
   });
-  it("rejects other actors, started/completed/protected work and inactive projects", () => {
+  it("rejects other actors, completed/cancelled/protected work and inactive projects", () => {
     const state = fixture(); state.actor = DEMO_MEMBERS[1];
     expect(calendarBookingMoveSourceUnavailableReason(state, ["morning"], now)).toContain("Only Bryan");
     state.actor = DEMO_MEMBERS[0]; state.sessions[0].protected = true;
@@ -45,9 +47,10 @@ describe("calendar booking move convenience checks", () => {
     state.sessions[0].usesReserve = true;
     expect(calendarBookingMoveSourceUnavailableReason(state, ["morning"], now)).toContain("reserve");
     state.sessions[0].usesReserve = false;
-    expect(calendarBookingMoveSourceUnavailableReason(state, ["morning"], "2026-09-09T13:01:00Z")).toContain("upcoming");
     state.sessions[0].status = "completed";
-    expect(calendarBookingMoveSourceUnavailableReason(state, ["morning"], now)).toContain("upcoming");
+    expect(calendarBookingMoveSourceUnavailableReason(state, ["morning"], now)).toContain("Completed or cancelled");
+    state.sessions[0].status = "cancelled";
+    expect(calendarBookingMoveSourceUnavailableReason(state, ["morning"], now)).toContain("Completed or cancelled");
     state.sessions[0].status = "planned"; state.items[0].status = "waiting";
     expect(calendarBookingMoveSourceUnavailableReason(state, ["morning", "afternoon"], now)).toContain("active");
   });

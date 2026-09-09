@@ -198,9 +198,9 @@ describe("explicit booking edits without project edits",()=>{
     expect(plan(snapshot,resize(60)).conflicts[0].code).toBe("protected_session");
     const proposal=plan(snapshot,{type:"resize_booking",sessionId:"one",minutes:60,overrideProtected:true}); ready(snapshot,proposal); expect(proposal.sessions[0].protected).toBe(true);
   });
-  it("preserves started/history work and never places new work into elapsed time",()=>{
-    const snapshot=state(); expect(plan(snapshot,resize(60),at("09:01")).conflicts[0].code).toBe("historical_session");
-    expect(plan(snapshot,move(),at("09:01")).conflicts[0].code).toBe("historical_session");
+  it("edits still-planned bookings after their start and never places new work into elapsed time",()=>{
+    const snapshot=state(); ready(snapshot,plan(snapshot,resize(60),at("09:01")));
+    ready(snapshot,plan(snapshot,move(),at("09:01")));
     const future=plan(snapshot,add(60,date),at("11:07")); ready(snapshot,future); expect(future.sessions[1].start).toBe(at("11:15")); expect(future.sessions[1].end).toBe(at("12:00")); expect(future.sessions[2].start).toBe(at("12:30"));
     snapshot.sessions[0].status="completed"; expect(plan(snapshot,resize(60)).conflicts[0].code).toBe("historical_session");
   });

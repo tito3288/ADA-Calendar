@@ -88,13 +88,14 @@ describe("direct booked-day hours", () => {
     const permitted = plan(snapshot, command([{ date: tuesday, minutes: 60 }], true)); ready(snapshot, permitted);
     expect(permitted.sessions[1]).toMatchObject({ protected: true, end: at(tuesday, "10:00") });
   });
-  it("permits tomorrow edits while another session is underway, retaining history exactly", () => {
+  it("edits planned totals after their clock time while preserving other days", () => {
     const snapshot = state(), clock = at(monday, "10:00");
     const proposal = plan(snapshot, command([{ date: tuesday, minutes: 60 }]), owner, clock); ready(snapshot, proposal, clock);
     expect(proposal.sessions[0]).toEqual(snapshot.sessions[0]);
     const sameDay=plan(snapshot, command([{ date: monday, minutes: 60 }]), owner, clock); ready(snapshot,sameDay,clock);
-    expect(sameDay.sessions[0]).toEqual(snapshot.sessions[0]);
-    expect(sameDay.sessions.at(-1)?.start).toBe(at(monday,"11:00"));
+    expect(sameDay.sessions[0]).toEqual({ ...snapshot.sessions[0], end: at(monday, "10:00") });
+    expect(sameDay.sessions[1]).toEqual(snapshot.sessions[1]);
+    expect(sameDay.items[0].remainingMinutes).toBe(180);
     failed(snapshot,plan(snapshot,command([{date:"2026-09-08",minutes:60}])),"historical_session");
   });
   it("changes only requested daily quotas and keeps unrelated unbooked daily amounts", () => {
@@ -105,7 +106,7 @@ describe("direct booked-day hours", () => {
   });
   it("retains a started booking in today's daily quota when adding upcoming hours", () => {
     const snapshot = state({ dailyPlan: [{ date: monday, minutes: 120 }, { date: tuesday, minutes: 120 }] });
-    const clock = at(monday, "10:07"), proposal = plan(snapshot, command([{ date: monday, minutes: 60 }]), owner, clock);
+    const clock = at(monday, "10:07"), proposal = plan(snapshot, command([{ date: monday, minutes: 180 }]), owner, clock);
     ready(snapshot, proposal, clock);
     expect(proposal.sessions.slice(0, 2)).toEqual(snapshot.sessions);
     expect(proposal.sessions[2]).toMatchObject({ start: at(monday, "11:00"), end: at(monday, "12:00") });

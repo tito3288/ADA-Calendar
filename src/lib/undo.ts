@@ -1,4 +1,4 @@
-import { instantMs, isInstant } from "./time";
+import { isInstant } from "./time";
 import type { ScheduleSnapshot, WorkEvent } from "./types";
 
 // Event snapshots come from both JSON files and PostgreSQL JSONB. Property order
@@ -20,23 +20,16 @@ export function undoUnavailableReason(
   if (!state.events.some(candidate=>candidate.id===event.id) || event.undoneBy || event.version!==state.version)
     return "Only the latest unchanged schedule change can be undone. A newer change was saved or this change was already undone.";
   const before=new Map(event.before.sessions.map(session=>[session.id,session]));
-  const current=new Map(state.sessions.map(session=>[session.id,session]));
-  const nowMs=instantMs(now);
   for (const session of state.sessions) {
     const restored=before.get(session.id);
     if (restored && canonical(restored)===canonical(session)) continue;
     if (!isInstant(session.start)) return "A changed work session has invalid dates. Refresh and review it before undoing.";
-    // This includes newly added sessions that undo would remove, as well as
-    // completed/cancelled history and metadata-only edits to started bookings.
-    if (instantMs(session.start)<nowMs)
-      return "A work session changed by this action has already started. Undo would change its history; use a new scheduling instruction instead.";
+    // Scheduled clock time is not evidence of actual work. Only recorded
+    // completion/cancellation makes a changed session immutable to Undo.
+    if (session.status!=="planned")
+      return "Undo would change completed or cancelled work. Use a new scheduling instruction instead.";
   }
-  for (const session of event.before.sessions) {
-    if (session.status!=="planned") continue;
-    const existing=current.get(session.id);
-    if (existing && canonical(existing)===canonical(session)) continue;
-    if (!isInstant(session.start) || instantMs(session.start)<nowMs)
-      return "Undo would restore work into the past. Choose new dates instead.";
-  }
+  // The server and SQL require the latest event's exact before snapshot.
+  // Restoring that existing planned booking is not a new booking in the past.
   return null;
 }

@@ -5,7 +5,7 @@ import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDemoState, DEMO_MEMBERS } from "./fixtures";
 import { newWorkItem } from "./work";
-import { localDateTime } from "./time";
+import { localDateTime, minutesBetween } from "./time";
 import type { AppState, ScheduleProposal, WorkCommand } from "./types";
 
 // Every transaction uses local fictional fixtures. Never call live providers.
@@ -67,9 +67,13 @@ describe("month group move authenticated transaction",()=>{
     const added=await preview("another-booking",{type:"add_booking",itemId:"site",request:{startDate:source,endDate:source,minutes:60,distribution:"total"}});expect((await commit(added)).status).toBe(200);const saved=await getDemoState(owner);
     const response=await send("commands",{commands:[move],operationId:"stale-aggregate",action:"preview"});expect((await response.json()).proposal.conflicts[0].code).toBe("booking_group_changed");expect(await getDemoState(owner)).toEqual(saved);
   });
-  it("refreshes when a source session starts between preview and confirmation",async()=>{
-    const before=await getDemoState(owner),proposal=await preview("started-drag");vi.setSystemTime(new Date(at("09:01")));
-    expect((await commit(proposal)).status).toBe(409);expect(await getDemoState(owner)).toEqual(before);
+  it.each(["09:01","11:01","17:01"])("commits the reviewed future destination when only the planned source clock advances (%s)",async clock=>{
+    const before=await getDemoState(owner),proposal=await preview("started-drag");vi.setSystemTime(new Date(at(clock)));
+    expect((await commit(proposal)).status).toBe(200);const saved=await getDemoState(owner);
+    expect(saved.sessions).toEqual(proposal.sessions);expect(saved.sessions[2]).toEqual(before.sessions[2]);
+    expect(saved.sessions.filter(session=>session.workItemId==="site").reduce((total,session)=>total+minutesBetween(session.start,session.end),0)).toBe(120);
+    expect(saved.items[0]).toMatchObject({remainingMinutes:240,estimatedMinutes:240});
+    expect((await commit(proposal)).status).toBe(200);expect(await getDemoState(owner)).toEqual(saved);
   });
   it("requires review again if usable target openings change as the clock advances",async()=>{
     await demoTransaction(state=>{state.sessions[0].start=at("09:00","2026-09-11");state.sessions[0].end=at("10:00","2026-09-11");state.sessions[1].start=at("10:00","2026-09-11");state.sessions[1].end=at("11:00","2026-09-11");});
@@ -86,8 +90,8 @@ describe("month group move authenticated transaction",()=>{
     for(const invalid of [{...move,overrideProtected:true},{...move,minutes:60},{...move,sessionIds:["first","first"]}])expect((await send("commands",{commands:[invalid],operationId:"invalid-group",action:"preview"})).status).toBe(400);
     expect((await send("commands",{commands:[move],operationId:"cross-origin-group",action:"preview"},"https://invalid.example.test")).status).toBe(400);expect(await getDemoState(owner)).toEqual(before);
   });
-  it("does not grant the private chat ledger permission to issue grouped drag commands",async()=>{
+  it("refuses grouped moves from another actor's private chat ledger",async()=>{
     const state=await getDemoState(owner),record={namespace:"ada-workspace-chat-v1",actorId:owner.id,actorRole:owner.role,workspaceId:state.workspaceId,createdAt:at("08:00"),turns:[{user:"Move work",assistant:"Preview",date:source,intent:"edit",kind:"preview"}],response:{reply:{kind:"preview",message:"Untrusted group command"}},command:move};
-    expect(()=>readWorkspaceChatRecord(record,owner,state,at("08:00"))).toThrow();
+    expect(()=>readWorkspaceChatRecord({...record,actorId:"another-owner"},owner,state,at("08:00"))).toThrow();
   });
 });
