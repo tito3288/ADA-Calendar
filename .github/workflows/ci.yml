@@ -79,7 +79,9 @@ jobs:
       - name: Browser tests with captured providers
         # playwright.config.ts starts its own development server on port 3100,
         # seeds .data-e2e, uses .next-e2e, and refuses an existing server.
-        run: npm run test:e2e
+        # Keep failure traces/screenshots as artifacts without building the large
+        # optional HTML report in the CI runner's memory. Local reports stay on.
+        run: npm run test:e2e -- --reporter=list
       - name: Retain browser failure evidence
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
