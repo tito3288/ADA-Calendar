@@ -56,6 +56,15 @@ for (const width of [1440, 390]) test(`selected day opens manual work, previews 
   await page.screenshot({ path: info.outputPath(`selected-date-actions-${width}.png`) });
   await add(page).click();
   const form = page.getByRole("dialog", { name: "Make room for new work", exact: true });
+  if (width === 1440) {
+    await expect(page.getByRole("dialog")).toHaveCount(1);
+    await form.getByRole("button", { name: "Close dialog", exact: true }).click();
+    const selectionModal = page.getByRole("dialog", { name: "Selected dates", exact: true });
+    await expect(selectionModal.locator("strong")).toHaveText("Sep 10, 2026");
+    expect(context.requests).toHaveLength(0);
+    await selectionModal.getByRole("button", { name: "Add work on these dates", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(1);
+  }
   await expect(form.getByLabel("Work day", { exact: true })).toHaveValue("2026-09-10");
   await expect(form.getByRole("button", { name: /^Total hours ADA fits/ })).toHaveAttribute("aria-pressed", "true");
   await form.getByLabel("What needs doing?", { exact: true }).fill("Cedar page edits");
@@ -69,6 +78,7 @@ for (const width of [1440, 390]) test(`selected day opens manual work, previews 
   expect(await form.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
   await form.getByRole("button", { name: "Confirm changes", exact: true }).click();
   await expect(form).toHaveCount(0);
+  await expect(page.getByRole("dialog", { name: "Selected dates", exact: true })).toHaveCount(0);
   await expect(page.locator(".date-selection-toolbar")).toHaveCount(0);
   expect(context.fixture().items).toHaveLength(1);
   expect(context.fixture().sessions.map(s => localDate(s.start, context.fixture().settings.timeZone))).toEqual(["2026-09-10"]);

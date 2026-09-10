@@ -48,6 +48,7 @@ import { CATEGORY_LABELS } from "@/lib/defaults";
 import { sortClientsByName } from "@/lib/clients";
 import { formatHours } from "@/lib/work";
 import { CalendarContent, type CalendarView } from "./calendar";
+import { DateSelectionActions } from "./date-selection-actions";
 import { api, ApiError, dateLabel, Empty, Field, Modal, timeLabel } from "./ui";
 import { WorkForm, ProposalCard } from "./work-form";
 import { SessionManager } from "./session-manager";
@@ -198,6 +199,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
   const [dateSelection, setDateSelection] =
     useState<AssistantDateSelection | null>(null);
   const [selectingDates, setSelectingDates] = useState(false);
+  const [dateSelectionModal, setDateSelectionModal] = useState(false);
   const [calendarMoveSelection, setCalendarMoveSelection] = useState<CalendarBookingMoveSelection | null>(null);
   const [calendarMoveLocked, setCalendarMoveLocked] = useState(false);
   const [selectionAnchor, setSelectionAnchor] = useState<string | null>(null);
@@ -221,6 +223,13 @@ export function Workspace({ initialState }: { initialState: AppState }) {
     setSection("calendar");
     setView("month");
     setSelectingDates(true);
+    setDateSelectionModal(Boolean(day));
+  }
+  function cancelDateSelection() {
+    setDateSelectionModal(false);
+    setSelectingDates(false);
+    setDateSelection(null);
+    setSelectionAnchor(null);
   }
   function requestDateSelection(day?: string) {
     if (state.actor.role === "viewer" || assistantDraft.busy) return;
@@ -423,6 +432,29 @@ export function Workspace({ initialState }: { initialState: AppState }) {
       ? [{ id: "notes" as const, icon: StickyNote, label: "Notes" }]
       : []),
   ];
+  const dateSelectionDescription = dateSelection?.kind === "project_span"
+    ? "Timeline only. No hours are reserved. Use Ask ADA, or choose Work window to book hours manually."
+    : "Schedule within these dates, not on every day. Capacity checks still apply.";
+  const dateSelectionActions = (
+    <DateSelectionActions
+      selection={dateSelection}
+      owner={owner}
+      onChange={setDateSelection}
+      onCancel={cancelDateSelection}
+      onAddWork={() => {
+        if (!dateSelection || dateSelection.kind !== "work_window") return;
+        setFormDates({ start: dateSelection.start, end: dateSelection.end });
+        setSelectedId(null);
+        setEditing(false);
+        setForm(true);
+      }}
+      onAskAda={() => {
+        setDateSelectionModal(false);
+        setSelectingDates(false);
+        setAssistant(true);
+      }}
+    />
+  );
   return (
     <div className="app-shell">
       {mobileNav && (
@@ -805,7 +837,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
             )}
             {section === "calendar" && (
               <>
-                {selectingDates && (
+                {selectingDates && !dateSelectionModal && (
                   <div className="date-selection-toolbar">
                     <div aria-live="polite">
                       <p className="eyebrow">SELECTED DATES</p>
@@ -822,69 +854,10 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                             : "Click once for one day, then another day for a range. You can move between months."}
                       </p>
                       <p className="micro muted">
-                        {dateSelection?.kind === "project_span"
-                          ? "Timeline only. No hours are reserved. Use Ask ADA, or choose Work window to book hours manually."
-                          : "Schedule within these dates, not on every day. Capacity checks still apply."}
+                        {dateSelectionDescription}
                       </p>
                     </div>
-                    <div className="date-selection-actions">
-                      {owner && dateSelection && (
-                        <label className="micro">
-                          Use dates as
-                          <select
-                            aria-label="Use selected dates as"
-                            value={dateSelection.kind}
-                            onChange={(e) =>
-                              setDateSelection({
-                                ...dateSelection,
-                                kind: e.target
-                                  .value as AssistantDateSelection["kind"],
-                              })
-                            }
-                          >
-                            <option value="work_window">Work window</option>
-                            <option value="project_span">
-                              Project timeline only
-                            </option>
-                          </select>
-                        </label>
-                      )}
-                      <button
-                        className="secondary"
-                        onClick={() => {
-                          setSelectingDates(false);
-                          setDateSelection(null);
-                          setSelectionAnchor(null);
-                        }}
-                      >
-                        Cancel selection
-                      </button>
-                      <button
-                        className="secondary date-selection-book"
-                        disabled={!dateSelection || dateSelection.kind !== "work_window"}
-                        onClick={() => {
-                          if (!dateSelection || dateSelection.kind !== "work_window") return;
-                          setFormDates({ start: dateSelection.start, end: dateSelection.end });
-                          setSelectedId(null);
-                          setEditing(false);
-                          setForm(true);
-                        }}
-                      >
-                        <Plus size={16} />
-                        {owner ? "Add work on these dates" : "Request work on these dates"}
-                      </button>
-                      <button
-                        className="primary"
-                        disabled={!dateSelection}
-                        onClick={() => {
-                          setSelectingDates(false);
-                          setAssistant(true);
-                        }}
-                      >
-                        <Sparkles size={16} />
-                        Ask ADA about these dates
-                      </button>
-                    </div>
+                    {dateSelectionActions}
                   </div>
                 )}
                 <CalendarBookingMove
@@ -908,7 +881,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                   dateSelection={selectingDates ? dateSelection : null}
                   onDate={pickDate}
                   onMoveBookings={owner ? setCalendarMoveSelection : undefined}
-                  movingBookings={calendarMoveLocked || !!calendarMoveSelection || busy || form || !!selected || findingTime || assistant || settings || help || !!proposal || !!requestId || !!block || confirmNewSelection || mobileNav}
+                  movingBookings={calendarMoveLocked || !!calendarMoveSelection || busy || dateSelectionModal || form || !!selected || findingTime || assistant || settings || help || !!proposal || !!requestId || !!block || confirmNewSelection || mobileNav}
                   onCommand={async (c) => {
                     try {
                       await command(c);
@@ -1330,8 +1303,29 @@ export function Workspace({ initialState }: { initialState: AppState }) {
         key={`helper-${state.workspaceId}-${state.actor.id}-${state.actor.role}`}
         state={state}
         onState={next => setState(current => next.workspaceId === current.workspaceId && next.actor.id === current.actor.id && next.actor.role === current.actor.role && next.version >= current.version ? next : current)}
-        hidden={form || !!selected || findingTime || assistant || settings || help || !!proposal || !!requestId || !!block || confirmNewSelection || mobileNav || !!calendarMoveSelection}
+        hidden={dateSelectionModal || form || !!selected || findingTime || assistant || settings || help || !!proposal || !!requestId || !!block || confirmNewSelection || mobileNav || !!calendarMoveSelection}
       />
+      <Modal
+        open={dateSelectionModal && selectingDates && !form}
+        onClose={cancelDateSelection}
+        title="Selected dates"
+        description="Add work or ask ADA about your selection."
+        wide
+      >
+        <div className="date-selection-modal">
+          <div className="date-selection-summary">
+            <CalendarDays size={22} aria-hidden="true" />
+            <div>
+              <strong>{dateSelection ? selectedDatesLabel(dateSelection) : "Choose a day"}</strong>
+              <p className="micro muted">{dateSelectionDescription}</p>
+            </div>
+          </div>
+          <button className="text-button" onClick={() => setDateSelectionModal(false)}>
+            Change dates on calendar
+          </button>
+          {dateSelectionActions}
+        </div>
+      </Modal>
       <Modal
         open={form}
         onClose={() => setForm(false)}
@@ -1354,9 +1348,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
           onSaved={update}
           onCommitted={() => {
             if (!editing && formDates) {
-              setSelectingDates(false);
-              setDateSelection(null);
-              setSelectionAnchor(null);
+              cancelDateSelection();
               setFormDates(null);
             }
           }}

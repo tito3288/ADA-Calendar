@@ -26,8 +26,9 @@ async function prepare(page: Page, width = 1440, role: "bryan" | "kyle" | "viewe
   await expect(page.getByTitle("Cedar Studio", { exact: true })).toHaveCount(1);
   return { fixture, stored };
 }
-const day = (page: Page, name: string) => page.getByLabel("Month workload calendar", { exact: true }).getByRole("button", { name: new RegExp(`^${name},`) });
+const day = (page: Page, name: string) => page.getByLabel("Month workload calendar", { exact: true }).getByRole("button", { name: new RegExp(`^${name},`), includeHidden: true });
 const dialog = (page: Page) => page.getByRole("dialog", { name: "Ask ADA", exact: true });
+const selectionDialog = (page: Page) => page.getByRole("dialog", { name: "Selected dates", exact: true });
 
 for (const width of [1440, 390]) test(`selects a cross-month range and retains it through a follow-up at ${width}px`, async ({ page }, info) => {
   const { fixture, stored } = await prepare(page, width);
@@ -41,6 +42,7 @@ for (const width of [1440, 390]) test(`selects a cross-month range and retains i
   });
   if (width === 1440) {
     await day(page, "Tuesday, September 29").dblclick();
+    await selectionDialog(page).getByRole("button", { name: "Change dates on calendar", exact: true }).click();
   } else {
     await page.getByRole("button", { name: "Select dates", exact: true }).click();
     await day(page, "Tuesday, September 29").click();
@@ -80,7 +82,8 @@ test("single-day keyboard selection, reverse ranges, reset, and Day button navig
   const { stored } = await prepare(page);
   await day(page, "Friday, September 11").focus();
   await page.keyboard.press("Enter");
-  await expect(page.locator(".date-selection-toolbar strong")).toHaveText("Sep 11, 2026");
+  await expect(selectionDialog(page).locator("strong")).toHaveText("Sep 11, 2026");
+  await selectionDialog(page).getByRole("button", { name: "Change dates on calendar", exact: true }).click();
   await day(page, "Wednesday, September 9").locator(".day-number").click();
   await expect(page.locator(".date-selection-toolbar strong")).toHaveText("Sep 9, 2026 – Sep 11, 2026");
   await day(page, "Monday, September 14").click();
@@ -111,17 +114,38 @@ test("single-day keyboard selection, reverse ranges, reset, and Day button navig
   expect(await state(page.request)).toEqual(stored);
 });
 
-test("double-click selects one day, extends the range, and cancellation leaves the calendar unchanged", async ({ page }, info) => {
-  const { stored } = await prepare(page);
+for (const width of [1440, 390]) test(`double-click opens a centered date modal with keyboard dismissal and range selection at ${width}px`, async ({ page }, info) => {
+  const { stored } = await prepare(page, width);
   const selected = day(page, "Wednesday, September 9");
-  await selected.click({ position: { x: 50, y: 130 } });
+  const position = { x: 20, y: 130 };
+  await selected.click({ position });
   await expect(page.locator(".date-selection-toolbar")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "month", exact: true })).toHaveClass(/active/);
-  await selected.dblclick({ position: { x: 50, y: 130 } });
-  await expect(page.locator(".date-selection-toolbar strong")).toHaveText("Sep 9, 2026");
+  await selected.dblclick({ position });
+  const modal = selectionDialog(page);
+  await expect(modal.locator("strong")).toHaveText("Sep 9, 2026");
+  await expect(page.getByRole("dialog")).toHaveCount(1);
+  await expect(page.locator(".date-selection-toolbar")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Open ADA helper", exact: true })).toHaveCount(0);
   await expect(selected).toHaveAttribute("aria-pressed", "true");
+  const bounds = (await modal.boundingBox())!;
+  expect(bounds.x + bounds.width / 2).toBeCloseTo(width / 2, 0);
+  expect(bounds.y + bounds.height / 2).toBeCloseTo(500, 0);
+  expect(await modal.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  expect((await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations).toEqual([]);
+  await page.screenshot({ path: info.outputPath(`date-selection-modal-${width}.png`) });
+  await page.keyboard.press("Shift+Tab");
+  expect(await modal.evaluate(el => el.contains(document.activeElement))).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(modal).toHaveCount(0);
+  await expect(selected).toBeFocused();
+  await expect(selected).not.toHaveClass(/date-selected/);
+  await page.keyboard.press("Space");
+  await expect(modal.locator("strong")).toHaveText("Sep 9, 2026");
   await expect(page.getByRole("button", { name: "Add work on these dates", exact: true })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Ask ADA about these dates", exact: true })).toBeEnabled();
+  await modal.getByRole("button", { name: "Change dates on calendar", exact: true }).click();
+  await expect(modal).toHaveCount(0);
   await day(page, "Friday, September 11").dblclick();
   await expect(page.locator(".date-selection-toolbar strong")).toHaveText("Sep 9, 2026 – Sep 11, 2026");
   await page.screenshot({ path: info.outputPath("double-click-date-selection.png") });
@@ -130,7 +154,12 @@ test("double-click selects one day, extends the range, and cancellation leaves t
   await expect(selected).not.toHaveClass(/date-selected/);
   await selected.focus();
   await page.keyboard.press("Space");
-  await expect(page.locator(".date-selection-toolbar strong")).toHaveText("Sep 9, 2026");
+  await expect(modal.locator("strong")).toHaveText("Sep 9, 2026");
+  await modal.getByRole("button", { name: "Cancel selection", exact: true }).click();
+  await expect(modal).toHaveCount(0);
+  await selected.dblclick({ position });
+  await modal.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await expect(modal).toHaveCount(0);
   expect(await state(page.request)).toEqual(stored);
 });
 
@@ -157,9 +186,10 @@ test("change and clear dates, preserve errors, and require a deliberate new inst
   await dialog(page).getByRole("button", { name: "Close dialog", exact: true }).click();
   await day(page, "Thursday, September 10").dblclick();
   await page.getByRole("button", { name: "Start a new instruction", exact: true }).click();
-  await expect(page.locator(".date-selection-toolbar strong")).toHaveText("Sep 10, 2026");
+  await expect(selectionDialog(page).locator("strong")).toHaveText("Sep 10, 2026");
   await page.getByLabel("Use selected dates as", { exact: true }).selectOption("project_span");
   await page.getByRole("button", { name: "Ask ADA about these dates", exact: true }).click();
+  await expect(selectionDialog(page)).toHaveCount(0);
   await expect(dialog(page).getByLabel("Instruction for ADA", { exact: true })).toHaveValue("");
   await expect(dialog(page).locator(".assistant-date-context")).toContainText("Selected project timeline");
 });
@@ -176,6 +206,7 @@ test("requesters get work windows, while viewers get no date-selection command",
   await expect(page.getByRole("button", { name: "Ask ADA", exact: true })).toHaveCount(0);
   await day(page, "Wednesday, September 9").dblclick();
   await expect(page.locator(".date-selection-toolbar")).toHaveCount(0);
+  await expect(selectionDialog(page)).toHaveCount(0);
   await expect(page.getByRole("button", { name: "month", exact: true })).toHaveClass(/active/);
   await page.getByRole("button", { name: "day", exact: true }).click();
   await expect(page.locator(".timed-calendar").getByRole("grid")).toBeVisible();
