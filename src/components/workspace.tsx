@@ -200,6 +200,25 @@ export function Workspace({ initialState }: { initialState: AppState }) {
     useState<AssistantDateSelection | null>(null);
   const [selectingDates, setSelectingDates] = useState(false);
   const [dateSelectionModal, setDateSelectionModal] = useState(false);
+  const dateSelectionToolbarRef = useRef<HTMLDivElement>(null);
+  const showDateSelectionToolbar = section === "calendar" && selectingDates && !dateSelectionModal;
+  useEffect(() => {
+    const main = stickyHeaderRef.current?.parentElement;
+    const toolbar = dateSelectionToolbarRef.current;
+    if (!main) return;
+    const updateHeight = () => {
+      const height = toolbar?.getBoundingClientRect().height ?? 0;
+      main.style.setProperty("--calendar-selection-toolbar-height", `${height}px`);
+    };
+    updateHeight();
+    if (!toolbar) return;
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(toolbar);
+    return () => {
+      observer.disconnect();
+      main.style.removeProperty("--calendar-selection-toolbar-height");
+    };
+  }, [showDateSelectionToolbar]);
   const [calendarMoveSelection, setCalendarMoveSelection] = useState<CalendarBookingMoveSelection | null>(null);
   const [calendarMoveLocked, setCalendarMoveLocked] = useState(false);
   const [selectionAnchor, setSelectionAnchor] = useState<string | null>(null);
@@ -837,8 +856,8 @@ export function Workspace({ initialState }: { initialState: AppState }) {
             )}
             {section === "calendar" && (
               <>
-                {selectingDates && !dateSelectionModal && (
-                  <div className="date-selection-toolbar">
+                {showDateSelectionToolbar && (
+                  <div ref={dateSelectionToolbarRef} className="date-selection-toolbar">
                     <div aria-live="polite">
                       <p className="eyebrow">SELECTED DATES</p>
                       <strong>

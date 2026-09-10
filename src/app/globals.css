@@ -773,14 +773,19 @@ small {
 .month-calendar {
   border: 1px solid var(--border);
   border-radius: 7px;
-  overflow: hidden;
+  /* Keep rounded clipping without making an ancestor scroll container for sticky. */
+  overflow: clip;
   container-type: inline-size;
 }
 .weekday-head {
+  position: sticky;
+  top: calc(var(--calendar-sticky-header-height, 0px) + var(--calendar-selection-toolbar-height, 0px));
+  z-index: 8;
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   background: #191f22;
   border-bottom: 1px solid var(--border);
+  box-shadow: 0 2px 5px #0002;
 }
 .weekday-head span {
   padding: 11px 12px;

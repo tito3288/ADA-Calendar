@@ -229,3 +229,50 @@ for (const width of [1440, 390]) test(`selected-date actions stay below the stic
   await ask.click();
   await expect(dialog(page).locator(".assistant-date-context")).toContainText("Sep 29, 2026");
 });
+
+for (const width of [1440, 390]) test(`weekday labels stick after the main header and follow selection height at ${width}px`, async ({ page }, info) => {
+  const { stored } = await prepare(page, width);
+  const header = page.locator(".calendar-sticky-header");
+  const weekdays = page.locator(".weekday-head");
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const initialHeader = (await header.boundingBox())!;
+  const initialWeekdays = (await weekdays.boundingBox())!;
+  expect(initialWeekdays.y).toBeGreaterThan(initialHeader.y + initialHeader.height);
+
+  // The main header pins first; the weekday row is still travelling up the page.
+  const firstScroll = initialHeader.y + 5;
+  await page.evaluate(y => window.scrollTo(0, y), firstScroll);
+  await expect.poll(async () => (await header.boundingBox())!.y).toBeCloseTo(0, 0);
+  expect((await weekdays.boundingBox())!.y).toBeCloseTo(initialWeekdays.y - firstScroll, 0);
+  expect((await weekdays.boundingBox())!.y).toBeGreaterThan((await header.boundingBox())!.height);
+
+  const stickyScroll = initialWeekdays.y - initialHeader.height + 80;
+  for (const y of [stickyScroll, stickyScroll + 100]) {
+    await page.evaluate(y => window.scrollTo(0, y), y);
+    await expect.poll(async () => (await weekdays.boundingBox())!.y - (await header.boundingBox())!.height).toBeCloseTo(0, 0);
+    expect(await weekdays.evaluate(el => {
+      const box = el.getBoundingClientRect();
+      return el.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+    })).toBe(true);
+  }
+  await page.screenshot({ path: info.outputPath(`sticky-weekdays-${width}.png`) });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await expect.poll(async () => (await weekdays.boundingBox())!.y).toBeCloseTo(initialWeekdays.y, 0);
+
+  await page.getByRole("button", { name: "Select dates", exact: true }).click();
+  await day(page, "Tuesday, September 29").locator(".day-number").click();
+  const toolbar = page.locator(".date-selection-toolbar");
+  for (const currentWidth of [width, width === 1440 ? 1100 : 520]) {
+    await page.setViewportSize({ width: currentWidth, height: 1000 });
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await expect.poll(async () => {
+      const top = (await weekdays.boundingBox())!.y;
+      const panel = (await toolbar.boundingBox())!;
+      return top - (panel.y + panel.height);
+    }).toBeCloseTo(0, 0);
+  }
+  await page.screenshot({ path: info.outputPath(`sticky-weekdays-with-selection-${width}.png`) });
+  await page.getByRole("button", { name: "Cancel selection", exact: true }).click();
+  await expect.poll(async () => (await weekdays.boundingBox())!.y - (await header.boundingBox())!.height).toBeCloseTo(0, 0);
+  expect(await state(page.request)).toEqual(stored);
+});
