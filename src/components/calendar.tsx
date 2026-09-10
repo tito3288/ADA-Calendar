@@ -53,6 +53,7 @@ export function MonthCalendar({
   const first = date.slice(0, 7) + "-01";
   const start = addDays(first, -(dayOfWeek(first) % 7));
   const today = localDate(new Date().toISOString(), state.settings.timeZone);
+  const canSelectDates = state.actor.role !== "viewer" && !movingBookings;
   const canMove = Boolean(onMoveBookings && state.actor.role === "owner" && !selectingDates && !movingBookings);
   const move = useCalendarBookingDrag(state, canMove, onMoveBookings);
   const movePicker = useRef<HTMLElement | null>(null);
@@ -70,6 +71,9 @@ export function MonthCalendar({
   );
   return (
     <>
+    {state.actor.role !== "viewer" && !selectingDates && (
+      <p className="micro muted">Double-click an empty day to select dates, or use Select dates.</p>
+    )}
     {canMove && (
       <div className="calendar-booking-drag-tools">
         {move.source && !move.isDragging ? (
@@ -172,8 +176,18 @@ export function MonthCalendar({
                     key={d}
                     data-date={d}
                     className={`day-cell ${d.slice(0, 7) !== first.slice(0, 7) ? "outside-month" : ""} ${d === today ? "is-today" : d < today ? "is-past" : ""} ${!isWorkday ? "weekend" : ""} ${inSelection ? "date-selected" : ""} ${dateSelection && (d === dateSelection.start || d === dateSelection.end) ? "date-endpoint" : ""} ${move.hover?.date === d ? move.hover.reason ? "booking-drop-blocked" : "booking-drop-target" : ""}`}
-                    onClick={() => { if (!move.suppressClick()) { if (move.source) move.chooseDay(d); else onDate(d); } }}
+                    onClick={event => {
+                      if (move.suppressClick() || movingBookings) return;
+                      if (move.source) move.chooseDay(d);
+                      // Keyboard activation selects directly. In selection mode,
+                      // ignore the second click of a double-click to keep the range anchor.
+                      else if (canSelectDates && (event.detail === 0 || selectingDates && event.detail === 1)) onDate(d);
+                    }}
+                    onDoubleClick={() => {
+                      if (canSelectDates && !selectingDates && !move.source && !move.suppressClick()) onDate(d);
+                    }}
                     aria-pressed={selectingDates ? inSelection : undefined}
+                    aria-description={canSelectDates && !selectingDates ? "Double-click, or press Enter or Space, to select this date." : undefined}
                     aria-label={`${dateLabel(d, { weekday: "long", month: "long", day: "numeric" })}, ${isWorkday ? `${formatHours(capacity.availableMinutes)} available, ${formatHours(capacity.plannedMinutes)} planned` : "Non-working day"}`}
                     title={
                       isWorkday

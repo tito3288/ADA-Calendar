@@ -39,8 +39,12 @@ for (const width of [1440, 390]) test(`selects a cross-month range and retains i
       replyToOperationId: requests.length === 1 ? input.operationId : null,
       dateSelection: requests.length === 1 ? input.dateSelection : null } });
   });
-  await page.getByRole("button", { name: "Select dates", exact: true }).click();
-  await day(page, "Tuesday, September 29").click();
+  if (width === 1440) {
+    await day(page, "Tuesday, September 29").dblclick();
+  } else {
+    await page.getByRole("button", { name: "Select dates", exact: true }).click();
+    await day(page, "Tuesday, September 29").click();
+  }
   await expect(day(page, "Tuesday, September 29")).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", { name: "Next period", exact: true }).click();
   await day(page, "Friday, October 2").click();
@@ -72,9 +76,8 @@ for (const width of [1440, 390]) test(`selects a cross-month range and retains i
   expect((await state(page.request)).notifications).toEqual(stored.notifications);
 });
 
-test("single-day keyboard selection, reverse ranges, reset, and ordinary day navigation", async ({ page }) => {
-  await prepare(page);
-  await page.getByRole("button", { name: "Select dates", exact: true }).click();
+test("single-day keyboard selection, reverse ranges, reset, and Day button navigation", async ({ page }) => {
+  const { stored } = await prepare(page);
   await day(page, "Friday, September 11").focus();
   await page.keyboard.press("Enter");
   await expect(page.locator(".date-selection-toolbar strong")).toHaveText("Sep 11, 2026");
@@ -89,7 +92,46 @@ test("single-day keyboard selection, reverse ranges, reset, and ordinary day nav
   await expect(page.getByRole("button", { name: "Ask ADA about these dates", exact: true })).toBeDisabled();
   await page.getByRole("button", { name: "Cancel selection", exact: true }).click();
   await day(page, "Wednesday, September 9").locator(".day-number").click();
+  await expect(page.getByRole("button", { name: "month", exact: true })).toHaveClass(/active/);
+  await expect(page.locator(".date-selection-toolbar")).toHaveCount(0);
+  await page.getByRole("button", { name: "Next period", exact: true }).click();
+  await expect(page.locator(".date-navigation h2")).toHaveText("October 2026");
+  await page.getByRole("button", { name: "day", exact: true }).click();
   await expect(page.getByRole("button", { name: "day", exact: true })).toHaveClass(/active/);
+  await expect(page.locator(".date-navigation h2")).toHaveText("September 8, 2026");
+  await expect(page.locator(".timed-calendar").getByRole("grid")).toBeVisible();
+  await page.getByRole("button", { name: "Next period", exact: true }).click();
+  await expect(page.locator(".date-navigation h2")).toHaveText("September 9, 2026");
+  await page.getByRole("button", { name: "Previous period", exact: true }).click();
+  await expect(page.locator(".date-navigation h2")).toHaveText("September 8, 2026");
+  await page.getByRole("button", { name: "Previous period", exact: true }).click();
+  await expect(page.locator(".date-navigation h2")).toHaveText("September 7, 2026");
+  await page.getByRole("button", { name: "Today", exact: true }).click();
+  await expect(page.locator(".date-navigation h2")).toHaveText("September 8, 2026");
+  expect(await state(page.request)).toEqual(stored);
+});
+
+test("double-click selects one day, extends the range, and cancellation leaves the calendar unchanged", async ({ page }, info) => {
+  const { stored } = await prepare(page);
+  const selected = day(page, "Wednesday, September 9");
+  await selected.click({ position: { x: 50, y: 130 } });
+  await expect(page.locator(".date-selection-toolbar")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "month", exact: true })).toHaveClass(/active/);
+  await selected.dblclick({ position: { x: 50, y: 130 } });
+  await expect(page.locator(".date-selection-toolbar strong")).toHaveText("Sep 9, 2026");
+  await expect(selected).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Add work on these dates", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Ask ADA about these dates", exact: true })).toBeEnabled();
+  await day(page, "Friday, September 11").dblclick();
+  await expect(page.locator(".date-selection-toolbar strong")).toHaveText("Sep 9, 2026 – Sep 11, 2026");
+  await page.screenshot({ path: info.outputPath("double-click-date-selection.png") });
+  await page.getByRole("button", { name: "Cancel selection", exact: true }).click();
+  await expect(page.locator(".date-selection-toolbar")).toHaveCount(0);
+  await expect(selected).not.toHaveClass(/date-selected/);
+  await selected.focus();
+  await page.keyboard.press("Space");
+  await expect(page.locator(".date-selection-toolbar strong")).toHaveText("Sep 9, 2026");
+  expect(await state(page.request)).toEqual(stored);
 });
 
 test("change and clear dates, preserve errors, and require a deliberate new instruction", async ({ page }) => {
@@ -108,14 +150,14 @@ test("change and clear dates, preserve errors, and require a deliberate new inst
   await dialog(page).getByRole("button", { name: "Clear dates", exact: true }).click();
   await expect(dialog(page).locator(".assistant-date-context")).toContainText("Dates from your instruction");
   await dialog(page).getByRole("button", { name: "Close dialog", exact: true }).click();
-  await page.getByRole("button", { name: "Select dates", exact: true }).click();
+  await day(page, "Thursday, September 10").dblclick();
   await expect(page.getByRole("dialog", { name: "Start a new instruction?", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Keep current instruction", exact: true }).click();
   await expect(dialog(page).getByLabel("Instruction for ADA", { exact: true })).toHaveValue(/Cedar Studio/);
   await dialog(page).getByRole("button", { name: "Close dialog", exact: true }).click();
-  await page.getByRole("button", { name: "Select dates", exact: true }).click();
+  await day(page, "Thursday, September 10").dblclick();
   await page.getByRole("button", { name: "Start a new instruction", exact: true }).click();
-  await day(page, "Thursday, September 10").click();
+  await expect(page.locator(".date-selection-toolbar strong")).toHaveText("Sep 10, 2026");
   await page.getByLabel("Use selected dates as", { exact: true }).selectOption("project_span");
   await page.getByRole("button", { name: "Ask ADA about these dates", exact: true }).click();
   await expect(dialog(page).getByLabel("Instruction for ADA", { exact: true })).toHaveValue("");
@@ -124,8 +166,7 @@ test("change and clear dates, preserve errors, and require a deliberate new inst
 
 test("requesters get work windows, while viewers get no date-selection command", async ({ page }) => {
   await prepare(page, 1440, "kyle");
-  await page.getByRole("button", { name: "Select dates", exact: true }).click();
-  await day(page, "Wednesday, September 9").click();
+  await day(page, "Wednesday, September 9").dblclick();
   await expect(page.getByLabel("Use selected dates as", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Ask ADA about these dates", exact: true }).click();
   await expect(dialog(page).locator(".assistant-date-context")).toContainText("Selected work dates");
@@ -133,6 +174,11 @@ test("requesters get work windows, while viewers get no date-selection command",
   await prepare(page, 1440, "viewer");
   await expect(page.getByRole("button", { name: "Select dates", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Ask ADA", exact: true })).toHaveCount(0);
+  await day(page, "Wednesday, September 9").dblclick();
+  await expect(page.locator(".date-selection-toolbar")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "month", exact: true })).toHaveClass(/active/);
+  await page.getByRole("button", { name: "day", exact: true }).click();
+  await expect(page.locator(".timed-calendar").getByRole("grid")).toBeVisible();
 });
 
 for (const width of [1440, 390]) test(`selected-date actions stay below the sticky header while scrolling at ${width}px`, async ({ page }, info) => {

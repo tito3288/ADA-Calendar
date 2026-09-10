@@ -44,9 +44,14 @@ const add = (page: Page) => page.getByRole("button", { name: "Add work on these 
 
 for (const width of [1440, 390]) test(`selected day opens manual work, previews and saves only that day at ${width}px`, async ({ page }, info) => {
   const context = await prepare(page, width);
-  await page.getByRole("button", { name: "Select dates", exact: true }).click();
-  await expect(add(page)).toBeDisabled();
-  await day(page, "Thursday, September 10").click();
+  if (width === 1440) {
+    await page.getByRole("button", { name: "month", exact: true }).click();
+    await day(page, "Thursday, September 10").dblclick();
+  } else {
+    await page.getByRole("button", { name: "Select dates", exact: true }).click();
+    await expect(add(page)).toBeDisabled();
+    await day(page, "Thursday, September 10").click();
+  }
   await expect(add(page)).toBeEnabled();
   await page.screenshot({ path: info.outputPath(`selected-date-actions-${width}.png`) });
   await add(page).click();

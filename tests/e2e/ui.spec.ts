@@ -163,13 +163,17 @@ test("keyboard session controls move protected time only after the explicit owne
 test("week and day views render exact working hours without client errors", async ({ page }, testInfo) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
-  await page.goto("/");
   const snapshot = await state(page.request);
   const session = snapshot.sessions.find(session => session.workItemId === "laville-build" && session.status === "planned") ?? snapshot.sessions.find(session => session.status === "planned")!;
-  const date = localDate(session.start, snapshot.settings.timeZone);
-  const label = new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" }).format(new Date(`${date}T12:00:00Z`));
+  await page.goto("/");
   const title = snapshot.items.find(item => item.id === session.workItemId)!.title;
-  await page.getByRole("button", { name: new RegExp(`^${label},`) }).locator(".day-number").click();
+  await page.getByRole("button", { name: "day", exact: true }).click();
+  const date = localDate(session.start, snapshot.settings.timeZone);
+  const today = localDate(new Date().toISOString(), snapshot.settings.timeZone);
+  const direction = date < today ? -1 : 1;
+  for (let current = today; current !== date; current = addDays(current, direction)) {
+    await page.getByRole("button", { name: direction < 0 ? "Previous period" : "Next period", exact: true }).click();
+  }
   await expect(page.locator(".timed-calendar").getByRole("grid")).toBeVisible();
   await expect(page.locator(".timed-calendar").getByText(new RegExp(title)).first()).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("day-calendar.png"), fullPage: true });

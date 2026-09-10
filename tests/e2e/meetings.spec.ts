@@ -38,15 +38,13 @@ function emptyFutureDay(snapshot: AppState, offset = 280) {
 
 async function showDate(page: Page, snapshot: AppState, date: string, width = 1440) {
   await page.setViewportSize({ width, height: 1000 });
+  // Make this fixture's date today in the browser; Day always opens today.
+  await page.clock.setFixedTime(new Date(localDateTime(date, "09:00", snapshot.settings.timeZone)));
   await page.goto("/");
   if (width <= 760) await expect(page.getByRole("button", { name: "agenda", exact: true })).toHaveClass(/active/);
   await page.getByRole("button", { name: "month", exact: true }).click();
-  const today = localDate(new Date().toISOString(), snapshot.settings.timeZone);
-  const months = (Number(date.slice(0, 4)) - Number(today.slice(0, 4))) * 12 + Number(date.slice(5, 7)) - Number(today.slice(5, 7));
-  for (let index = 0; index < months; index++) await page.getByRole("button", { name: "Next period", exact: true }).click();
   await expect(day(page, date)).toBeVisible();
-  // Selecting the date also proves the entry form can use the viewed workday.
-  await day(page, date).locator(".day-number").click();
+  await page.getByRole("button", { name: "day", exact: true }).click();
   await expect(page.getByRole("button", { name: "day", exact: true })).toHaveClass(/active/);
 }
 

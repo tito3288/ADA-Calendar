@@ -202,6 +202,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
   const [calendarMoveLocked, setCalendarMoveLocked] = useState(false);
   const [selectionAnchor, setSelectionAnchor] = useState<string | null>(null);
   const [confirmNewSelection, setConfirmNewSelection] = useState(false);
+  const [pendingSelectionDate, setPendingSelectionDate] = useState<string | null>(null);
   const [settings, setSettings] = useState(false);
   const [help, setHelp] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
@@ -211,19 +212,26 @@ export function Workspace({ initialState }: { initialState: AppState }) {
   const [requestId, setRequestId] = useState<string | null>(null);
   const [block, setBlock] = useState<{ date: string; existing?: UnavailableBlock } | null>(null);
   const owner = state.actor.role === "owner";
-  function beginDateSelection() {
+  function beginDateSelection(day?: string) {
     setAssistantDraft(emptyAssistantDraft());
-    setDateSelection(null);
-    setSelectionAnchor(null);
+    setDateSelection(day ? { start: day, end: day, kind: "work_window" } : null);
+    setSelectionAnchor(day ?? null);
+    setPendingSelectionDate(null);
     setConfirmNewSelection(false);
     setSection("calendar");
     setView("month");
     setSelectingDates(true);
   }
+  function requestDateSelection(day?: string) {
+    if (state.actor.role === "viewer" || assistantDraft.busy) return;
+    if (assistantDraft.text.trim() || assistantDraft.replyToOperationId || assistantDraft.proposal) {
+      setPendingSelectionDate(day ?? null);
+      setConfirmNewSelection(true);
+    } else beginDateSelection(day);
+  }
   function pickDate(day: string) {
     if (!selectingDates) {
-      setDate(day);
-      setView("day");
+      requestDateSelection(day);
       return;
     }
     if (!selectionAnchor) {
@@ -615,15 +623,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                   <button
                     className="secondary"
                     disabled={assistantDraft.busy}
-                    onClick={() => {
-                      if (
-                        assistantDraft.text.trim() ||
-                        assistantDraft.replyToOperationId ||
-                        assistantDraft.proposal
-                      )
-                        setConfirmNewSelection(true);
-                      else beginDateSelection();
-                    }}
+                    onClick={() => requestDateSelection()}
                   >
                     <CalendarDays size={16} />
                     Select dates
@@ -780,7 +780,10 @@ export function Workspace({ initialState }: { initialState: AppState }) {
                           className={view === v ? "active" : ""}
                           key={v}
                           disabled={selectingDates && v !== "month"}
-                          onClick={() => setView(v)}
+                          onClick={() => {
+                            if (v === "day" && view !== "day") setDate(today);
+                            setView(v);
+                          }}
                         >
                           {v}
                         </button>
@@ -1404,7 +1407,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
           >
             Keep current instruction
           </button>
-          <button className="primary" onClick={beginDateSelection}>
+          <button className="primary" onClick={() => beginDateSelection(pendingSelectionDate ?? undefined)}>
             Start a new instruction
           </button>
         </div>
