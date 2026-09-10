@@ -45,6 +45,7 @@ import {
 } from "@/lib/time";
 import { dayCapacity } from "@/lib/scheduler";
 import { CATEGORY_LABELS } from "@/lib/defaults";
+import { sortClientsByName } from "@/lib/clients";
 import { formatHours } from "@/lib/work";
 import { CalendarContent, type CalendarView } from "./calendar";
 import { api, ApiError, dateLabel, Empty, Field, Modal, timeLabel } from "./ui";
@@ -494,7 +495,7 @@ export function Workspace({ initialState }: { initialState: AppState }) {
             <span className="client-dot" />
             All clients
           </button>
-          {state.clients.map((c) => (
+          {sortClientsByName(state.clients).map((c) => (
             <button
               title={c.name}
               className={`client-filter ${client === c.id ? "active" : ""}`}

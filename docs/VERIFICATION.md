@@ -2,6 +2,11 @@
 
 This records evidence for the eight phases in [the approved blueprint](BLUEPRINT.md), not a claim that hosted services have been deployed. Sample clients, the demo parser, and captured notifications are deliberately isolated from live work.
 
+## Alphabetical client lists — September 10, 2026
+
+- Task create/edit dropdowns, sidebar filters and the client directory share alphabetical display ordering, ignoring case and sorting numbers naturally. Directory name edits keep their row position until add/save; original stored client order and selected IDs remain intact.
+- All 1,289 unit/server tests and 11 existing directory/alias-editing browser scenarios pass, along with lint, TypeScript checking and the production build. Desktop/mobile browser inspection confirmed identical sorted names across all three lists, selection by client ID, intact name typing and readable layouts using isolated numeric/mixed-case fixtures. No production calendar mutation or real email was used for verification.
+
 ## Finish one booked day — September 9, 2026
 
 - Added visible per-day completion with review/confirmation, grouped day history and muted completed calendar segments. The three-day example finishes only the first hour, changes remaining effort from 3h to 2h, and leaves tomorrow and the following day active. Unknown totals, original estimates and unfinished project status are preserved. Month/week/day/agenda retain done hours without reserving capacity.

@@ -2,6 +2,7 @@
 import { useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Plus, Save, UserPlus } from "lucide-react";
 import type { AppState } from "@/lib/types";
+import { sortClientsByName } from "@/lib/clients";
 import { api, Field } from "./ui";
 
 const parseAliases = (text: string) =>
@@ -17,6 +18,9 @@ export function SettingsPanel({
   const [tab, setTab] = useState("hours");
   const [settings, setSettings] = useState(state.settings);
   const [clients, setClients] = useState(state.clients);
+  // Keep rows still while typing; refresh their display order on add/save.
+  const [clientOrder, setClientOrder] = useState(() => sortClientsByName(state.clients).map(client => client.id));
+  const displayClients = clientOrder.flatMap(id => clients.filter(client => client.id === id));
   // Keep partially typed spaces and separators until the directory is saved.
   const [aliasDrafts, setAliasDrafts] = useState<Record<string, string>>({});
   const [priorities, setPriorities] = useState(state.priorities);
@@ -73,6 +77,7 @@ export function SettingsPanel({
     const next = await save({ type: "clients", clients: directory });
     if (next) {
       setClients(next.clients);
+      setClientOrder(sortClientsByName(next.clients).map(client => client.id));
       setAliasDrafts({});
       setClientName("");
       setAliases("");
@@ -284,7 +289,7 @@ export function SettingsPanel({
             conversation. Save directory also saves the new client entered below.
           </p>
           <div className="client-editor-list">
-            {clients.map((c) => (
+            {displayClients.map((c) => (
               <div key={c.id}>
                 <input
                   disabled={busy}
@@ -330,7 +335,9 @@ export function SettingsPanel({
               className="secondary"
               disabled={busy || !clientName.trim()}
               onClick={() => {
-                setClients([...clients, newClient()]);
+                const nextClients = [...clients, newClient()];
+                setClients(nextClients);
+                setClientOrder(sortClientsByName(nextClients).map(client => client.id));
                 setClientName("");
                 setAliases("");
                 setMessage("");

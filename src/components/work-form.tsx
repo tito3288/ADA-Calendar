@@ -10,6 +10,7 @@ import type {
 import { isDate, localDate, localDateTime, minutesBetween } from "@/lib/time";
 import { defaultWorkPriority, newWorkItem } from "@/lib/work";
 import { CATEGORY_LABELS } from "@/lib/defaults";
+import { sortClientsByName } from "@/lib/clients";
 import { api, ApiError, Field, dateLabel, timeLabel } from "./ui";
 import { SmartFitFields } from "./smart-fit-fields";
 import { DayHoursFields } from "./day-hours-fields";
@@ -511,7 +512,7 @@ export function WorkForm({
               required
               onChange={(event) => patch({ clientId: event.target.value })}
             >
-              {state.clients.map((client) => (
+              {sortClientsByName(state.clients).map((client) => (
                 <option key={client.id} value={client.id}>
                   {client.name}
                 </option>
